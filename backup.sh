@@ -22,7 +22,7 @@ rm -rfv DB/
 #ssh-copy-id -i ~/.ssh/id_rsa.pub -p port [destuser]@[destip]
 
 rsync -azvrh --progress $DEST/$DBZIP -e 'ssh -p [destport] -i /root/.ssh/id_rsa' [destuser]@[destip]:[destdbbackuppath]
-rsync -azvrh --progress /var/www/html/** -e 'ssh -p [destport] -i /root/.ssh/id_rsa' [destuser]@[destip]:[destfilesbackuppath]
+rsync -azvrh --progress --exclude 'fm' --exclude 'nginx.conf' /var/www/html/** -e 'ssh -p [destport] -i /root/.ssh/id_rsa' [destuser]@[destip]:[destfilesbackuppath]
 
 
 
