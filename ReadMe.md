@@ -8,6 +8,6 @@
 
 
 
-# 0 */8 * * * sh /var/www/backups/files.sh >> /var/www/backups/backup.log 2>&1
+# 0 */8 * * * sh /var/www/backups/database.sh >> /var/www/backups/db.log 2>&1
 
-# 0 21 * * * sh /var/www/backups/files.sh >> /var/www/backups/backup.log 2>&1
+# 0 21 * * * sh /var/www/backups/files.sh >> /var/www/backups/files.log 2>&1
