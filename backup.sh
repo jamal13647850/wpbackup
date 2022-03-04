@@ -2,16 +2,18 @@ SCRIPTPATH="$( cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
 DIR=`date +"%Y%m%d-%H%M%S"`
 DEST=$SCRIPTPATH/backups/$DIR
 DBZIP='DB-'$DIR'.zip'
-BACKUP_RETAIN_DURATION=10
+FILESZIP='Files-'$DIR'.zip'
+BACKUP_RETAIN_DURATION=5
 
 
 mkdir -pv $SCRIPTPATH/backups
 find $SCRIPTPATH/backups/ -mtime +"${BACKUP_RETAIN_DURATION}" -exec rm -rfv {} \;
 
+
 mkdir -pv $DEST
+
+
 mkdir -pv $DEST/DB
-
-
 cd $DEST/DB
 wp db export --add-drop-table --path=/var/www/html
 cd $DEST
@@ -19,8 +21,13 @@ zip -r9 $DBZIP DB/
 rm -rfv DB/
 
 
+mkdir -pv $DEST/Files
+cp -rfv /var/www/html/* $DEST/Files
+cd $DEST
+zip -r9 $FILESZIP Files/
+rm -rfv Files/
 
 rsync -azvrh --progress $DEST/$DBZIP -e 'ssh -p [destport] -i /root/.ssh/id_rsa' [destuser]@[destip]:[destdbbackuppath]
-rsync -azvrh --progress --exclude 'fm' --exclude 'wp-content/cache' --exclude 'wp-content/debug.log' --exclude 'wp-content/backups-dup-pro' --exclude 'nginx.conf' /var/www/html/** -e 'ssh -p [destport] -i /root/.ssh/id_rsa' [destuser]@[destip]:[destfilesbackuppath]
+rsync -azvrh --progress $DEST/$FILESZIP -e 'ssh -p [destport] -i /root/.ssh/id_rsa' [destuser]@[destip]:[destfilesbackuppath]
 
 
