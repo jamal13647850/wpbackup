@@ -12,6 +12,9 @@ mkdir -pv $gfBackupFolderDB
 cd $gfBackupFolderDB
 wp db export --add-drop-table --path=$wppath
 
+wp plugin install gravityformscli --path=$wppath
+wp plugin activate gravityformscli --path=$wppath
+
 exportForms () {
   declare -A dates
   declare -A startDate
@@ -71,3 +74,6 @@ wp gf form list --active --sort_column=id --format=csv --path=$wppath|awk '{ FS 
 cd ..
 zip -r9 exported-$DIR.zip exported-$DIR
 rm -rv exported-$DIR
+
+wp plugin deactivate gravityformscli --path=$wppath
+wp plugin delete gravityformscli --path=$wppath
