@@ -3,7 +3,9 @@ DIR=`date +"%Y%m%d-%H%M%S"`
 DEST=$SCRIPTPATH/backups/$DIR
 DBZIP='DB-'$DIR'.zip'
 FILESZIP='Files-'$DIR'.zip'
-BACKUP_RETAIN_DURATION=5
+
+. ./settings.conf
+
 
 
 mkdir -pv $SCRIPTPATH/backups
@@ -27,7 +29,7 @@ cd $DEST
 zip -r9 $FILESZIP Files/
 rm -rfv Files/
 
-rsync -azvrh --progress $DEST/$DBZIP -e 'ssh -p [destport] -i /root/.ssh/id_rsa' [destuser]@[destip]:[destdbbackuppath]
-rsync -azvrh --progress $DEST/$FILESZIP -e 'ssh -p [destport] -i /root/.ssh/id_rsa' [destuser]@[destip]:[destfilesbackuppath]
+rsync -azvrh --progress $DEST/$DBZIP -e "ssh -p ${destinationPort} -i ${privateKeyPath}" $destinationUser@$destinationIP:$destinationDbBackupPath
+rsync -azvrh --progress $DEST/$FILESZIP -e "ssh -p ${destinationPort} -i ${privateKeyPath}" $destinationUser@$destinationIP:$destinationFilesBackupPath
 
 

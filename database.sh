@@ -2,7 +2,10 @@ SCRIPTPATH="$( cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
 DIR=`date +"%Y%m%d-%H%M%S"`
 DEST=$SCRIPTPATH/backups/$DIR
 DBZIP='DB-'$DIR'.zip'
-BACKUP_RETAIN_DURATION=10
+
+. ./settings.conf
+
+
 
 
 mkdir -pv $SCRIPTPATH/backups
@@ -19,5 +22,5 @@ zip -r9 $DBZIP DB/
 rm -rfv DB/
 
 
-rsync -azvrh --progress $DEST/$DBZIP -e 'ssh -p [destport] -i /root/.ssh/id_rsa' [destuser]@[destip]:[destdbbackuppath]
+rsync -azvrh --progress $DEST/$DBZIP -e "ssh -p ${destinationPort} -i ${privateKeyPath}" $destinationUser@$destinationIP:$destinationDbBackupPath
 
