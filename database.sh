@@ -16,7 +16,7 @@ mkdir -pv $DEST/DB
 
 
 cd $DEST/DB
-wp db export --add-drop-table --path=/var/www/html
+wp db export --add-drop-table --path=$wpPath
 cd $DEST
 zip -r9 $DBZIP DB/
 rm -rfv DB/
