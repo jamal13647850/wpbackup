@@ -4,7 +4,7 @@ DEST=$SCRIPTPATH/backups/$DIR
 DBZIP='DB-'$DIR'.zip'
 FILESZIP='Files-'$DIR'.zip'
 
-. ./settings.conf
+. $SCRIPTPATH/settings.conf
 
 
 

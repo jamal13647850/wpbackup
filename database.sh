@@ -3,7 +3,7 @@ DIR=`date +"%Y%m%d-%H%M%S"`
 DEST=$SCRIPTPATH/backups/$DIR
 DBZIP='DB-'$DIR'.zip'
 
-. ./settings.conf
+. $SCRIPTPATH/settings.conf
 
 
 
