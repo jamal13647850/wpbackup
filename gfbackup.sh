@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 SCRIPTPATH="$( cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
 DIR=`date +"%Y%m%d-%H%M%S"`
 gfBackupFolder=$SCRIPTPATH/forms-$DIR

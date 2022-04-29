@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 SCRIPTPATH="$( cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
 DIR=`date +"%Y%m%d-%H%M%S"`
 DEST=$SCRIPTPATH/backups/$DIR
@@ -9,7 +11,7 @@ FILESZIP='Files-'$DIR'.zip'
 
 
 mkdir -pv $SCRIPTPATH/backups
-find $SCRIPTPATH/backups/ -mtime +"${BACKUP_RETAIN_DURATION}" -exec rm -rfv {} \;
+#find $SCRIPTPATH/backups/ -mtime +"${BACKUP_RETAIN_DURATION}" -exec rm -rfv {} \;
 
 
 mkdir -pv $DEST
