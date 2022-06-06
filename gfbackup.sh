@@ -30,7 +30,7 @@ exportForms () {
  
 
 
-  sdate=$(date -I -d "$input_start") || exit -1
+  sdate=$(date -I -D "$input_start") || exit -1
   edate=`date +"%Y-%m-%d"`   || exit -1
 
   d="$sdate"
@@ -39,13 +39,13 @@ exportForms () {
 
     startDate[$counter]=$(echo $d| sed 's/20//g');
 
-    d=$(date -I -d "$d + 30 day")
+    d=$(date -I -D "$d + 30 day")
     endDate[$counter]=$(echo $d| sed 's/20//g');
     if [[ "$d" > "$edate" ]] || [[ "$d" = "$edate" ]]
     then
       endDate[$counter]=$(echo $edate| sed 's/20//g');
     fi
-    d=$(date -I -d "$d + 1 day")
+    d=$(date -I -D "$d + 1 day")
 
     dates[$counter]="--start_date=${startDate[$counter]} --end_date=${endDate[$counter]}"
 
