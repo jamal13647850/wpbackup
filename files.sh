@@ -16,7 +16,7 @@ mkdir -pv $DEST
 
 
 mkdir -pv $DEST/Files
-cp -rfv /var/www/html/* $DEST/Files
+cp -rfv $wpPath/* $DEST/Files
 cd $DEST
 zip -r9 $FILESZIP Files/
 rm -rfv Files/

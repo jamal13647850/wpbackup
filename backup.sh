@@ -19,14 +19,14 @@ mkdir -pv $DEST
 
 mkdir -pv $DEST/DB
 cd $DEST/DB
-wp db export --add-drop-table --path=/var/www/html
+wp db export --add-drop-table --path=$wpPath
 cd $DEST
 zip -r9 $DBZIP DB/
 rm -rfv DB/
 
 
 mkdir -pv $DEST/Files
-cp -rfv /var/www/html/* $DEST/Files
+cp -rfv $wpPath/* $DEST/Files
 cd $DEST
 zip -r9 $FILESZIP Files/
 rm -rfv Files/
