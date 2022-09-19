@@ -26,7 +26,8 @@ rm -rfv DB/
 
 
 mkdir -pv $DEST/Files
-cp -rfv $wpPath/* $DEST/Files
+#cp -rfv $wpPath/* $DEST/Files
+rsync -av --progress --max-size=$maxSize --exclude 'wp-staging' --exclude '*.log' --exclude 'cache' --exclude 'wpo-cache' $wpPath/** $DEST/Files
 cd $DEST
 zip -r9 $FILESZIP Files/
 rm -rfv Files/
