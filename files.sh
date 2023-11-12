@@ -23,7 +23,7 @@ nice -n 19 rsync -av --progress --max-size=$maxSize --exclude 'wp-staging' --exc
 
 cd $DEST
 nice -n 19 zip -r9 $FILESZIP Files/
-rm -rfv Files/
+nice -n 19 rm -rfv Files/
 
 
 nice -n 19 rsync -azvrh --progress $DEST/$FILESZIP -e "ssh -p ${destinationPort} -i ${privateKeyPath}" $destinationUser@$destinationIP:$destinationFilesBackupPath

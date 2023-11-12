@@ -19,20 +19,20 @@ mkdir -pv $DEST
 
 mkdir -pv $DEST/DB
 cd $DEST/DB
-wp db export --add-drop-table --path=$wpPath
+nice -n 19 wp db export --add-drop-table --path=$wpPath
 cd $DEST
-zip -r9 $DBZIP DB/
-rm -rfv DB/
+nice -n 19 zip -r9 $DBZIP DB/
+nice -n 19 rm -rfv DB/
 
 
 mkdir -pv $DEST/Files
 #cp -rfv $wpPath/* $DEST/Files
-rsync -av --progress --max-size=$maxSize --exclude 'wp-staging' --exclude '*.log' --exclude 'cache' --exclude 'wpo-cache' $wpPath/** $DEST/Files
+nice -n 19 rsync -av --progress --max-size=$maxSize --exclude 'wp-staging' --exclude '*.log' --exclude 'cache' --exclude 'wpo-cache' $wpPath/** $DEST/Files
 cd $DEST
-zip -r9 $FILESZIP Files/
-rm -rfv Files/
+nice -n 19 zip -r9 $FILESZIP Files/
+nice -n 19 rm -rfv Files/
 
-rsync -azvrh --progress $DEST/$DBZIP -e "ssh -p ${destinationPort} -i ${privateKeyPath}" $destinationUser@$destinationIP:$destinationDbBackupPath
-rsync -azvrh --progress $DEST/$FILESZIP -e "ssh -p ${destinationPort} -i ${privateKeyPath}" $destinationUser@$destinationIP:$destinationFilesBackupPath
+nice -n 19 rsync -azvrh --progress $DEST/$DBZIP -e "ssh -p ${destinationPort} -i ${privateKeyPath}" $destinationUser@$destinationIP:$destinationDbBackupPath
+nice -n 19 rsync -azvrh --progress $DEST/$FILESZIP -e "ssh -p ${destinationPort} -i ${privateKeyPath}" $destinationUser@$destinationIP:$destinationFilesBackupPath
 
 
