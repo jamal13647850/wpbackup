@@ -18,11 +18,11 @@ mkdir -pv $DEST/DB
 
 
 cd $DEST/DB
-nice wp db export --add-drop-table --path=$wpPath
+nice -n 19 wp db export --add-drop-table --path=$wpPath
 cd $DEST
-nice zip -r9 $DBZIP DB/
+nice -n 19 zip -r9 $DBZIP DB/
 rm -rfv DB/
 
 
-nice rsync -azvrh --progress $DEST/$DBZIP -e "ssh -p ${destinationPort} -i ${privateKeyPath}" $destinationUser@$destinationIP:$destinationDbBackupPath
+nice -n 19 rsync -azvrh --progress $DEST/$DBZIP -e "ssh -p ${destinationPort} -i ${privateKeyPath}" $destinationUser@$destinationIP:$destinationDbBackupPath
 
