@@ -1,218 +1,325 @@
-#!/usr/bin/env bash
+#!/bin/bash
+# common.sh - Common functions and variables for WordPress backup scripts
+# Author: System Administrator
+# Last updated: 2025-05-16
 
-# Common variables
-SCRIPTPATH="$( cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
-DIR=$(date +"%Y%m%d-%H%M%S")
+SCRIPTPATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 START_TIME=$(date +%s)
-ERROR_LOG="$SCRIPTPATH/errors.log"
+DIR=$(date +%Y%m%d-%H%M%S)
 
-# Logging function with advanced levels
+# Terminal colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+WHITE='\033[0;37m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+# Default log files
+LOG_FILE="${LOG_FILE:-$SCRIPTPATH/script.log}"
+STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/status.log}"
+
+# Logging function with colored output
 log() {
     local level="$1"
     local message="$2"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    case "${LOG_LEVEL:-normal}" in
-        verbose)
-            [ -n "$LOG_FILE" ] && echo "$timestamp - [$level] $message" >> "$LOG_FILE"
-            echo "$timestamp - [$level] $message" >&2
+    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+
+    # Skip DEBUG messages if not in verbose mode
+    if [ "$level" = "DEBUG" ] && [ "$LOG_LEVEL" != "verbose" ]; then
+        return
+    fi
+
+    # Always write to log file
+    echo -e "${timestamp} - [$level] $message" >> "$LOG_FILE"
+
+    # Display colored output to terminal based on log level
+    case "$level" in
+        "ERROR")
+            echo -e "${timestamp} - ${RED}${BOLD}[$level]${NC} $message"
             ;;
-        normal)
-            if [ "$level" != "DEBUG" ]; then
-                [ -n "$LOG_FILE" ] && echo "$timestamp - [$level] $message" >> "$LOG_FILE"
-                echo "$timestamp - [$level] $message" >&2
+        "WARNING")
+            echo -e "${timestamp} - ${YELLOW}${BOLD}[$level]${NC} $message"
+            ;;
+        "INFO")
+            if [ "$LOG_LEVEL" = "verbose" ]; then
+                echo -e "${timestamp} - ${GREEN}[$level]${NC} $message"
             fi
             ;;
-        minimal)
-            if [ "$level" = "ERROR" ] || [ "$level" = "INFO" ]; then
-                [ -n "$LOG_FILE" ] && echo "$timestamp - [$level] $message" >> "$LOG_FILE"
-                echo "$timestamp - [$level] $message" >&2
-            fi
+        "DEBUG")
+            echo -e "${timestamp} - ${CYAN}[$level]${NC} $message"
+            ;;
+        *)
+            echo -e "${timestamp} - [$level] $message"
             ;;
     esac
 }
 
-# Status update function
+# Update status log
 update_status() {
     local status="$1"
     local message="$2"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    if [ -n "$STATUS_LOG" ]; then
-        echo "$timestamp - [$status] $message" >> "$STATUS_LOG"
+    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    echo "${timestamp} - [${status}] ${message}" >> "$STATUS_LOG"
+}
+
+# Check command status and handle errors
+check_status() {
+    local status=$1
+    local operation=$2
+    local process_type=$3
+
+    if [ $status -ne 0 ]; then
+        log "ERROR" "$operation failed with status $status"
+        update_status "FAILED" "$operation failed with status $status"
+        notify "FAILED" "$operation failed with status $status" "$process_type"
+        echo -e "${RED}${BOLD}Error:${NC} $operation failed with status $status"
+        exit $status
+    else
+        log "DEBUG" "$operation completed successfully"
     fi
 }
 
-# Notification function with multiple methods
+# Send notifications based on configuration
 notify() {
     local status="$1"
     local message="$2"
-    local subject_prefix="$3"
-    local project_name=$(basename "${CONFIG_FILE:-unknown}" .conf)
-    local notify_methods="${NOTIFY_METHOD:-email}"
+    local process_type="$3"
 
-    IFS=',' read -ra methods <<< "$notify_methods"
-    for method in "${methods[@]}"; do
+    # Skip if notification method is not set
+    if [ -z "$NOTIFY_METHOD" ]; then
+        return
+    fi
+
+    # Process comma-separated notification methods
+    IFS=',' read -ra METHODS <<< "$NOTIFY_METHOD"
+    for method in "${METHODS[@]}"; do
         case "$method" in
-            email)
-                if [ -n "$NOTIFY_EMAIL" ] && command -v mail >/dev/null 2>&1; then
-                    echo "$message" | mail -s "$subject_prefix $status: $project_name" "$NOTIFY_EMAIL"
-                    log "DEBUG" "Email notification sent to $NOTIFY_EMAIL: $status - $message"
-                elif [ -n "$NOTIFY_EMAIL" ]; then
-                    log "WARNING" "Mail command not found, email notification not sent"
+            "email")
+                if [ -n "$NOTIFY_EMAIL" ]; then
+                    echo "$message" | mail -s "[$status] $process_type Process" "$NOTIFY_EMAIL"
+                    log "INFO" "Email notification sent to $NOTIFY_EMAIL"
                 fi
                 ;;
-            slack)
-                if [ -n "$SLACK_WEBHOOK_URL" ] && command -v curl >/dev/null 2>&1; then
-                    local slack_message="{\"text\": \"$subject_prefix $status: $project_name - $message\"}"
-                    curl -X POST -H 'Content-type: application/json' --data "$slack_message" "$SLACK_WEBHOOK_URL" >/dev/null 2>&1
-                    log "DEBUG" "Slack notification sent: $status - $message"
-                elif [ -n "$SLACK_WEBHOOK_URL" ]; then
-                    log "WARNING" "curl not found, Slack notification not sent"
+            "slack")
+                if [ -n "$SLACK_WEBHOOK_URL" ]; then
+                    curl -s -X POST -H 'Content-type: application/json' \
+                        --data "{\"text\":\"[$status] $process_type Process: $message\"}" \
+                        "$SLACK_WEBHOOK_URL"
+                    log "INFO" "Slack notification sent"
                 fi
                 ;;
-            telegram)
-                if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ] && command -v curl >/dev/null 2>&1; then
-                    local telegram_message="$subject_prefix $status: $project_name - $message"
-                    curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
-                         -d chat_id="$TELEGRAM_CHAT_ID" -d text="$telegram_message" >/dev/null 2>&1
-                    log "DEBUG" "Telegram notification sent: $status - $message"
-                elif [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
-                    log "WARNING" "curl not found, Telegram notification not sent"
+            "telegram")
+                if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+                    curl -s -X POST \
+                        "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+                        -d chat_id="$TELEGRAM_CHAT_ID" \
+                        -d text="[$status] $process_type Process: $message"
+                    log "INFO" "Telegram notification sent"
                 fi
-                ;;
-            *)
-                log "WARNING" "Unknown NOTIFY_METHOD: $method, skipping"
                 ;;
         esac
     done
 }
 
-# Error reporting function
-report_error() {
-    local exit_code="$1"
-    local task="$2"
-    local subject_prefix="${3:-Operation}"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    local error_message="$task failed with exit code $exit_code"
-
-    log "ERROR" "$error_message"
-    echo "$timestamp - $error_message" >> "$ERROR_LOG"
-    update_status "FAILURE" "$task"
-    notify "FAILURE" "$error_message" "$subject_prefix"
-    exit 1
-}
-
-# Check command status
-check_status() {
-    local status="$1"
-    local message="$2"
-    local context="${3:-Operation}"
-    if [ "$status" -ne 0 ]; then
-        report_error "$status" "$message" "$context"
-    else
-        log "DEBUG" "$message succeeded"
-    fi
-}
-
-# Compression function
+# Compress files with specified format
 compress() {
-    local src="$1"
-    local dest="$2"
-    local context="${3:-Operation}"
-    case "${COMPRESSION_FORMAT:-tar.gz}" in
-        tar.gz)
-            if command -v pigz >/dev/null 2>&1; then
-                nice -n "${NICE_LEVEL:-19}" tar -c "$src" | pigz -9 > "$dest"
-                check_status $? "Compressing $src with pigz" "$context"
+    local source="$1"
+    local output="$2"
+
+    case "${output##*.}" in
+        "zip")
+            nice -n "$NICE_LEVEL" zip -r "$output" "$source"
+            ;;
+        "gz"|"tgz")
+            if [[ "$output" == *tar.gz ]]; then
+                nice -n "$NICE_LEVEL" tar -czf "$output" "$source"
             else
-                nice -n "${NICE_LEVEL:-19}" tar -czf "$dest" "$src"
-                check_status $? "Compressing $src with tar" "$context"
+                nice -n "$NICE_LEVEL" gzip -c "$source" > "$output"
             fi
             ;;
-        zip)
-            nice -n "${NICE_LEVEL:-19}" zip -r9 "$dest" "$src"
-            check_status $? "Compressing $src with zip" "$context"
+        "bz2")
+            if [[ "$output" == *tar.bz2 ]]; then
+                nice -n "$NICE_LEVEL" tar -cjf "$output" "$source"
+            else
+                nice -n "$NICE_LEVEL" bzip2 -c "$source" > "$output"
+            fi
             ;;
-        tar)
-            nice -n "${NICE_LEVEL:-19}" tar -cf "$dest" "$src"
-            check_status $? "Compressing $src with tar (no compression)" "$context"
-            ;;
-        *)
-            log "ERROR" "Unsupported compression format: $COMPRESSION_FORMAT"
-            report_error 1 "Unsupported compression format: $COMPRESSION_FORMAT" "$context"
-            ;;
-    esac
-}
-
-# Decompression function
-decompress() {
-    local src="$1"
-    local dest="$2"
-    local context="${3:-Operation}"
-    case "$src" in
-        *.tar.gz)
-            nice -n "${NICE_LEVEL:-19}" tar -xzf "$src" -C "$dest"
-            check_status $? "Decompressing $src with tar.gz" "$context"
-            ;;
-        *.zip)
-            nice -n "${NICE_LEVEL:-19}" unzip "$src" -d "$dest"
-            check_status $? "Decompressing $src with zip" "$context"
-            ;;
-        *.tar)
-            nice -n "${NICE_LEVEL:-19}" tar -xf "$src" -C "$dest"
-            check_status $? "Decompressing $src with tar" "$context"
+        "xz")
+            if [[ "$output" == *tar.xz ]]; then
+                nice -n "$NICE_LEVEL" tar -cJf "$output" "$source"
+            else
+                nice -n "$NICE_LEVEL" xz -c "$source" > "$output"
+            fi
             ;;
         *)
-            log "ERROR" "Unsupported compression format for $src"
-            report_error 1 "Unsupported compression format for $src" "$context"
+            # Default to tar if format not recognized
+            nice -n "$NICE_LEVEL" tar -cf "$output" "$source"
             ;;
     esac
+
+    return $?
 }
 
-# Function to load and decrypt config file
+# Interactive config file selection
+select_config_file() {
+    local config_dir="$1"
+    local script_type="$2"
+    local configs=()
+    local i=0
+
+    # Check if config directory exists
+    if [ ! -d "$config_dir" ]; then
+        echo -e "${RED}${BOLD}Error: Config directory $config_dir not found!${NC}" >&2
+        return 1
+    fi
+
+    # List regular config files first
+    while IFS= read -r file; do
+        if [[ "$file" != *".gpg" ]]; then
+            configs+=("$file")
+            echo -e "[$i] ${CYAN}$(basename "$file")${NC}"
+            ((i++))
+        fi
+    done < <(find "$config_dir" -type f -name "*.conf" | sort)
+
+    # Then list encrypted config files
+    while IFS= read -r file; do
+        configs+=("$file")
+        echo -e "[$i] ${PURPLE}$(basename "$file") (encrypted)${NC}"
+        ((i++))
+    done < <(find "$config_dir" -type f -name "*.conf.gpg" | sort)
+
+    # Check if any config files were found
+    if [ ${#configs[@]} -eq 0 ]; then
+        echo -e "${RED}${BOLD}Error: No configuration files found in $config_dir!${NC}" >&2
+        return 1
+    fi
+
+    # Prompt user to select a config file
+    echo -e "${GREEN}Select a configuration file by number:${NC}"
+    read -p "> " selection
+
+    # Validate selection
+    if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -ge ${#configs[@]} ]; then
+        echo -e "${RED}${BOLD}Error: Invalid selection!${NC}" >&2
+        return 1
+    fi
+
+    # Set the selected config file
+    CONFIG_FILE="${configs[$selection]}"
+    echo -e "${GREEN}Selected: ${BOLD}$(basename "$CONFIG_FILE")${NC}"
+
+    return 0
+}
+
+# Function for cleanup operations
+cleanup() {
+    local process_name="$1"
+    local process_type="$2"
+
+    log "INFO" "Script interrupted or finished! Cleaning up..."
+    update_status "INTERRUPTED" "Process for $DIR"
+
+    # Kill any background processes
+    jobs -p | xargs -r kill
+
+    return 0
+}
+
+# Load and decrypt config file if necessary
 load_config() {
     local config_file="$1"
-    local decrypted_file="${config_file}.decrypted"
-    local passphrase_file="${HOME}/.gpg-passphrase"
 
+    # Check if config file exists
+    if [ ! -f "$config_file" ]; then
+        echo "echo -e \"${RED}${BOLD}Error: Configuration file $config_file not found!${NC}\" >&2; exit 1"
+        return 1
+    fi
+
+    # Handle encrypted config files
     if [[ "$config_file" =~ \.gpg$ ]]; then
-        if ! command -v gpg >/dev/null 2>&1; then
-            log "ERROR" "gpg is not installed! Please install it with 'sudo apt install gnupg'."
-            report_error 1 "gpg not installed" "ConfigLoading"
+        # Check if gpg is installed
+        if ! command -v gpg &>/dev/null; then
+            echo "echo -e \"${RED}${BOLD}Error: gpg is not installed but required for encrypted config files!${NC}\" >&2; exit 1"
+            return 1
         fi
-        log "INFO" "Decrypting config file: $config_file"
-        if [ -n "$CONFIG_PASSPHRASE" ]; then
-            gpg --batch --yes --passphrase "$CONFIG_PASSPHRASE" -d "$config_file" > "$decrypted_file" 2>/dev/null
-        elif [ -f "$passphrase_file" ]; then
-            gpg --batch --yes --passphrase-file "$passphrase_file" -d "$config_file" > "$decrypted_file" 2>/dev/null
-        else
-            log "ERROR" "No passphrase provided and $passphrase_file not found!"
-            report_error 1 "Passphrase not provided" "ConfigLoading"
-        fi
-        if [ $? -ne 0 ]; then
-            log "ERROR" "Failed to decrypt $config_file. Wrong passphrase or corrupted file."
-            rm -f "$decrypted_file"
-            report_error 1 "Decryption failed for $config_file" "ConfigLoading"
-        fi
-        chmod 600 "$decrypted_file"
-        log "DEBUG" "Config file decrypted: $decrypted_file"
-        echo "source $decrypted_file"
+
+        # Decrypt the config file
+        gpg --quiet --decrypt "$config_file" 2>/dev/null
     else
-        echo "source $config_file"
+        # Output the content of a regular config file
+        cat "$config_file"
     fi
 }
 
-# Cleanup function for interruptions and decrypted files
-cleanup() {
-    local context="${1:-Process}"
-    local subject_prefix="${2:-Operation}"
-    log "INFO" "Script interrupted or finished! Cleaning up..."
-    if [ -n "$CONFIG_FILE" ] && [ -f "${CONFIG_FILE}.decrypted" ]; then
-        rm -f "${CONFIG_FILE}.decrypted"
-        log "INFO" "Cleaned up decrypted file: ${CONFIG_FILE}.decrypted"
-    fi
-    update_status "INTERRUPTED" "$context for $DIR"
-    notify "INTERRUPTED" "$context for $DIR interrupted or completed" "$subject_prefix"
+# Check if a command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
 }
 
-# Trap interruptions and exit
-trap 'cleanup "Process" "Operation"' INT TERM EXIT
+# Check for required commands
+check_requirements() {
+    local missing_commands=()
+
+    for cmd in "$@"; do
+        if ! command_exists "$cmd"; then
+            missing_commands+=("$cmd")
+        fi
+    done
+
+    if [ ${#missing_commands[@]} -gt 0 ]; then
+        echo -e "${RED}${BOLD}Error: Required commands not found: ${missing_commands[*]}${NC}" >&2
+        echo -e "${YELLOW}Please install the missing packages and try again.${NC}" >&2
+        return 1
+    fi
+
+    return 0
+}
+
+# Initialize log file with header
+init_log() {
+    local script_name="$1"
+    echo "----------------------------------------" >> "$LOG_FILE"
+    echo "Starting $script_name at $(date)" >> "$LOG_FILE"
+    echo "----------------------------------------" >> "$LOG_FILE"
+}
+
+# Format duration in human-readable format
+format_duration() {
+    local seconds=$1
+    local days=$((seconds/86400))
+    local hours=$(( (seconds%86400)/3600 ))
+    local minutes=$(( (seconds%3600)/60 ))
+    local remaining_seconds=$((seconds%60))
+
+    if [ $days -gt 0 ]; then
+        echo "${days}d ${hours}h ${minutes}m ${remaining_seconds}s"
+    elif [ $hours -gt 0 ]; then
+        echo "${hours}h ${minutes}m ${remaining_seconds}s"
+    elif [ $minutes -gt 0 ]; then
+        echo "${minutes}m ${remaining_seconds}s"
+    else
+        echo "${remaining_seconds}s"
+    fi
+}
+
+# Convert bytes to human-readable size
+human_readable_size() {
+    local size=$1
+    local units=("B" "KB" "MB" "GB" "TB")
+    local unit=0
+
+    while [ $size -ge 1024 ] && [ $unit -lt 4 ]; do
+        size=$((size/1024))
+        ((unit++))
+    done
+
+    echo "$size${units[$unit]}"
+}
+
+# Set up trap to handle interruptions
+trap 'cleanup "Script" "Process"' INT TERM
