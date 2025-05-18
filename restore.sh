@@ -1,59 +1,60 @@
 #!/bin/bash
+# restore.sh - WordPress restore script
+# Author: System Administrator
+# Last updated: 2025-05-17
+
+# Source common functions and variables
 . "$(dirname "$0")/common.sh"
 
+# Set log files for this script
 LOG_FILE="$SCRIPTPATH/restore.log"
 STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/restore_status.log}"
 
-# Initialize variables with defaults
+# Initialize default values
 DRY_RUN=false
 VERBOSE=false
-RESTORE_DB=true
-RESTORE_FILES=true
+RESTORE_TYPE="full"  # Default to full restore (both DB and files)
 BACKUP_SOURCE=""
+FORCE=false
 
 # Parse command line options
-while getopts "c:b:dfvh" opt; do
+while getopts "c:b:s:t:dfv" opt; do
     case $opt in
         c) CONFIG_FILE="$OPTARG";;
-        b) BACKUP_SOURCE="$OPTARG";;
+        b) BACKUP_FILE="$OPTARG";;
+        s) BACKUP_SOURCE="$OPTARG";;
+        t) RESTORE_TYPE="$OPTARG";;
         d) DRY_RUN=true;;
-        f) RESTORE_FILES=true; RESTORE_DB=false;;
-        v) VERBOSE=true; LOG_LEVEL="verbose";;
-        h) 
-            echo -e "${BLUE}${BOLD}WordPress Backup Restore Script${NC}"
-            echo -e "${CYAN}Usage:${NC} $0 [options]"
-            echo -e "${CYAN}Options:${NC}"
-            echo -e "  -c <config_file>     Configuration file"
-            echo -e "  -b <backup_source>   Backup file or directory to restore from"
-            echo -e "  -d                   Dry run (no actual changes)"
-            echo -e "  -f                   Restore files only (skip database)"
-            echo -e "  -v                   Verbose output"
-            echo -e "  -h                   Show this help"
-            exit 0
-            ;;
-        ?) 
-            echo -e "${RED}${BOLD}Usage:${NC} $0 -c <config_file> -b <backup_source> [-d] [-f] [-v]" >&2
+        f) FORCE=true;;
+        v) VERBOSE=true;;
+        ?)
+            echo -e "${RED}${BOLD}Usage:${NC} $0 -c <config_file> [-b <backup_file>] [-s <source>] [-t <type>] [-d] [-f] [-v]" >&2
+            echo -e "  -c: Configuration file (can be encrypted .conf.gpg or regular .conf)"
+            echo -e "  -b: Specific backup file to restore (if not specified, latest will be used)"
+            echo -e "  -s: Backup source (local, remote)"
+            echo -e "  -t: Restore type (full, db, files)"
+            echo -e "  -d: Dry run (no actual changes)"
+            echo -e "  -f: Force restore without confirmation"
+            echo -e "  -v: Verbose output"
             exit 1
             ;;
     esac
 done
 
-# If config file not specified, prompt for selection
+# Initialize log
+init_log "WordPress Restore"
+
+# If no config file specified, prompt user to select one
 if [ -z "$CONFIG_FILE" ]; then
     echo -e "${YELLOW}${BOLD}No configuration file specified.${NC}"
     if ! select_config_file "$SCRIPTPATH/configs" "restore"; then
         echo -e "${RED}${BOLD}Error: Configuration file selection failed!${NC}" >&2
         exit 1
     fi
-elif [ ! -f "$CONFIG_FILE" ]; then
-    echo -e "${RED}${BOLD}Error: Configuration file $CONFIG_FILE not found!${NC}" >&2
-    exit 1
-else
-    echo -e "${GREEN}Using configuration file: ${BOLD}$(basename "$CONFIG_FILE")${NC}"
 fi
 
-# Source the config file directly
-. "$CONFIG_FILE"
+# Process the configuration file (handles both encrypted and regular files)
+process_config_file "$CONFIG_FILE" "Restore"
 
 # Validate required configuration variables
 for var in wpPath; do
@@ -63,240 +64,249 @@ for var in wpPath; do
     fi
 done
 
-# If no backup source is specified, prompt for selection
-if [ -z "$BACKUP_SOURCE" ]; then
-    echo -e "${YELLOW}${BOLD}No backup source specified.${NC}"
-    
-    # Check if there are local backups
-    LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-$SCRIPTPATH/local_backups}"
-    if [ -d "$LOCAL_BACKUP_DIR" ]; then
-        echo "Available local backups:"
-        
-        # List database backups
-        DB_BACKUPS=()
-        i=0
-        while IFS= read -r file; do
-            DB_BACKUPS+=("$file")
-            echo "[$i] DB: $(basename "$file")"
-            ((i++))
-        done < <(find "$LOCAL_BACKUP_DIR" -type f -name "DB-*" | sort -r)
-        
-        # List file backups
-        FILES_BACKUPS=()
-        while IFS= read -r file; do
-            FILES_BACKUPS+=("$file")
-            echo "[$i] Files: $(basename "$file")"
-            ((i++))
-        done < <(find "$LOCAL_BACKUP_DIR" -type f -name "Files-*" | sort -r)
-        
-        # Check if any backups were found
-        if [ ${#DB_BACKUPS[@]} -eq 0 ] && [ ${#FILES_BACKUPS[@]} -eq 0 ]; then
-            echo -e "${RED}${BOLD}Error: No backups found in $LOCAL_BACKUP_DIR!${NC}" >&2
+# Set default values
+BACKUP_DIR="${BACKUP_DIR:-$SCRIPTPATH/backups}"
+LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-$SCRIPTPATH/local_backups}"
+RESTORE_DIR="${RESTORE_DIR:-$SCRIPTPATH/restore_tmp}"
+BACKUP_SOURCE="${BACKUP_SOURCE:-${BACKUP_LOCATION:-local}}"
+NICE_LEVEL="${NICE_LEVEL:-19}"
+LOG_LEVEL="${VERBOSE:+verbose}"
+LOG_LEVEL="${LOG_LEVEL:-${LOG_LEVEL:-normal}}"
+
+# Validate remote backup settings if needed
+if [ "$BACKUP_SOURCE" = "remote" ]; then
+    for var in destinationPort destinationUser destinationIP destinationDbBackupPath destinationFilesBackupPath privateKeyPath; do
+        if [ -z "${!var}" ]; then
+            echo -e "${RED}${BOLD}Error: Required SSH variable $var is not set in $CONFIG_FILE for remote restore!${NC}" >&2
             exit 1
         fi
-        
-        # Prompt user to select backups
-        if [ ${#DB_BACKUPS[@]} -gt 0 ] && [ "$RESTORE_DB" = true ]; then
-            echo "Select a database backup by number (or leave empty to skip):"
-            read -p "> " db_selection
-            
-            if [ -n "$db_selection" ]; then
-                # Validate selection
-                if ! [[ "$db_selection" =~ ^[0-9]+$ ]] || [ "$db_selection" -ge ${#DB_BACKUPS[@]} ]; then
-                    echo -e "${RED}${BOLD}Error: Invalid database backup selection!${NC}" >&2
-                    exit 1
-                fi
-                
-                DB_BACKUP="${DB_BACKUPS[$db_selection]}"
-                echo -e "${GREEN}Selected DB backup: $(basename "$DB_BACKUP")${NC}"
-            else
-                RESTORE_DB=false
-            fi
-        else
-            RESTORE_DB=false
-        fi
-        
-        if [ ${#FILES_BACKUPS[@]} -gt 0 ] && [ "$RESTORE_FILES" = true ]; then
-            echo "Select a files backup by number (or leave empty to skip):"
-            read -p "> " files_selection
-            
-            if [ -n "$files_selection" ]; then
-                # Validate selection
-                max_index=$((${#DB_BACKUPS[@]} + ${#FILES_BACKUPS[@]} - 1))
-                if ! [[ "$files_selection" =~ ^[0-9]+$ ]] || [ "$files_selection" -gt $max_index ]; then
-                    echo -e "${RED}${BOLD}Error: Invalid files backup selection!${NC}" >&2
-                    exit 1
-                fi
-                
-                # Adjust index for files backups
-                files_index=$((files_selection - ${#DB_BACKUPS[@]}))
-                if [ $files_index -lt 0 ]; then
-                    echo -e "${RED}${BOLD}Error: Invalid files backup selection!${NC}" >&2
-                    exit 1
-                fi
-                
-                FILES_BACKUP="${FILES_BACKUPS[$files_index]}"
-                echo -e "${GREEN}Selected files backup: $(basename "$FILES_BACKUP")${NC}"
-            else
-                RESTORE_FILES=false
-            fi
-        else
-            RESTORE_FILES=false
-        fi
-    else
-        echo -e "${RED}${BOLD}Error: Local backup directory $LOCAL_BACKUP_DIR not found!${NC}" >&2
-        exit 1
-    fi
-else
-    # Check if backup source exists
-    if [ ! -f "$BACKUP_SOURCE" ] && [ ! -d "$BACKUP_SOURCE" ]; then
-        echo -e "${RED}${BOLD}Error: Backup source $BACKUP_SOURCE not found!${NC}" >&2
-        exit 1
-    fi
-    
-    # If backup source is a directory, look for DB and Files backups
-    if [ -d "$BACKUP_SOURCE" ]; then
-        # Find the most recent DB backup
-        DB_BACKUP=$(find "$BACKUP_SOURCE" -type f -name "DB-*" | sort -r | head -n 1)
-        
-        # Find the most recent Files backup
-        FILES_BACKUP=$(find "$BACKUP_SOURCE" -type f -name "Files-*" | sort -r | head -n 1)
-    else
-        # If backup source is a file, determine if it's a DB or Files backup
-        if [[ "$BACKUP_SOURCE" == *"DB-"* ]]; then
-            DB_BACKUP="$BACKUP_SOURCE"
-            RESTORE_FILES=false
-        elif [[ "$BACKUP_SOURCE" == *"Files-"* ]]; then
-            FILES_BACKUP="$BACKUP_SOURCE"
-            RESTORE_DB=false
-        else
-            echo -e "${RED}${BOLD}Error: Cannot determine backup type for $BACKUP_SOURCE!${NC}" >&2
-            exit 1
-        fi
-    fi
+    done
 fi
 
-# Cleanup function specific to restore
+# Function for cleanup operations specific to restore
 cleanup_restore() {
     cleanup "Restore process" "Restore"
-    rm -rf "$TEMP_DIR"
+    rm -rf "$RESTORE_DIR"
 }
 trap cleanup_restore INT TERM
 
-# Start restore process
-log "INFO" "Starting restore process for $DIR"
-update_status "STARTED" "Restore process for $DIR"
+# Log start of restore process
+log "INFO" "Starting restore process from $BACKUP_SOURCE (Type: $RESTORE_TYPE)"
+update_status "STARTED" "Restore process from $BACKUP_SOURCE"
 
-# Create temporary directory for extraction
-TEMP_DIR="$SCRIPTPATH/temp_restore_$DIR"
-if [ "$DRY_RUN" = false ]; then
-    mkdir -p "$TEMP_DIR"
-    check_status $? "Creating temporary directory" "Restore"
+# Validate SSH connection if needed
+if [ "$BACKUP_SOURCE" = "remote" ]; then
+    validate_ssh "$destinationUser" "$destinationIP" "$destinationPort" "$privateKeyPath" "Restore"
+    log "INFO" "SSH connection validated successfully"
 fi
 
-# Restore database if requested
-if [ "$RESTORE_DB" = true ] && [ -n "$DB_BACKUP" ]; then
-    log "INFO" "Restoring database from $(basename "$DB_BACKUP")"
+# Create temporary directory for restore
+if [ "$DRY_RUN" = false ]; then
+    rm -rf "$RESTORE_DIR"
+    mkdir -p "$RESTORE_DIR"
+    check_status $? "Creating restore directory" "Restore"
+else
+    log "INFO" "Dry run: Skipping directory creation"
+fi
+
+# Function to find the latest backup file
+find_latest_backup() {
+    local prefix="$1"
+    local source="$2"
+    local path="$3"
+    local latest=""
+    
+    if [ "$source" = "local" ]; then
+        latest=$(ls -t "$path/$prefix"* 2>/dev/null | head -n 1)
+    else
+        latest=$(ssh -p "$destinationPort" -i "$privateKeyPath" "$destinationUser@$destinationIP" "ls -t $path/$prefix* 2>/dev/null | head -n 1")
+    fi
+    
+    if [ -z "$latest" ]; then
+        echo -e "${RED}${BOLD}Error: No $prefix backup found in $path!${NC}" >&2
+        return 1
+    fi
+    
+    echo "$latest"
+    return 0
+}
+
+# Function to download or copy backup file
+get_backup_file() {
+    local source_path="$1"
+    local dest_path="$2"
+    local source_type="$3"
+    
+    if [ "$source_type" = "local" ]; then
+        echo -e "${CYAN}${BOLD}Copying backup file from local storage...${NC}"
+        cp -v "$source_path" "$dest_path"
+    else
+        echo -e "${CYAN}${BOLD}Downloading backup file from remote storage...${NC}"
+        scp -P "$destinationPort" -i "$privateKeyPath" "$destinationUser@$destinationIP:$source_path" "$dest_path"
+    fi
+    
+    return $?
+}
+
+# Determine backup files to restore
+DB_FILE_PREFIX="${DB_FILE_PREFIX:-DB}"
+FILES_FILE_PREFIX="${FILES_FILE_PREFIX:-Files}"
+
+if [ "$RESTORE_TYPE" = "full" ] || [ "$RESTORE_TYPE" = "db" ]; then
+    if [ -n "$BACKUP_FILE" ] && [[ "$(basename "$BACKUP_FILE")" == "${DB_FILE_PREFIX}-"* ]]; then
+        DB_BACKUP_FILE="$BACKUP_FILE"
+    else
+        if [ "$BACKUP_SOURCE" = "local" ]; then
+            DB_BACKUP_FILE=$(find_latest_backup "${DB_FILE_PREFIX}-" "local" "$LOCAL_BACKUP_DIR")
+        else
+            DB_BACKUP_FILE=$(find_latest_backup "${DB_FILE_PREFIX}-" "remote" "$destinationDbBackupPath")
+        fi
+    fi
+    
+    if [ $? -ne 0 ] || [ -z "$DB_BACKUP_FILE" ]; then
+        echo -e "${RED}${BOLD}Error: Failed to find database backup file!${NC}" >&2
+        exit 1
+    fi
+    
+    log "INFO" "Using database backup: $(basename "$DB_BACKUP_FILE")"
+    echo -e "${GREEN}Using database backup: ${BOLD}$(basename "$DB_BACKUP_FILE")${NC}"
+fi
+
+if [ "$RESTORE_TYPE" = "full" ] || [ "$RESTORE_TYPE" = "files" ]; then
+    if [ -n "$BACKUP_FILE" ] && [[ "$(basename "$BACKUP_FILE")" == "${FILES_FILE_PREFIX}-"* ]]; then
+        FILES_BACKUP_FILE="$BACKUP_FILE"
+    else
+        if [ "$BACKUP_SOURCE" = "local" ]; then
+            FILES_BACKUP_FILE=$(find_latest_backup "${FILES_FILE_PREFIX}-" "local" "$LOCAL_BACKUP_DIR")
+        else
+            FILES_BACKUP_FILE=$(find_latest_backup "${FILES_FILE_PREFIX}-" "remote" "$destinationFilesBackupPath")
+        fi
+    fi
+    
+    if [ $? -ne 0 ] || [ -z "$FILES_BACKUP_FILE" ]; then
+        echo -e "${RED}${BOLD}Error: Failed to find files backup file!${NC}" >&2
+        exit 1
+    fi
+    
+    log "INFO" "Using files backup: $(basename "$FILES_BACKUP_FILE")"
+    echo -e "${GREEN}Using files backup: ${BOLD}$(basename "$FILES_BACKUP_FILE")${NC}"
+fi
+
+# Confirm restore operation if not forced
+if [ "$FORCE" = false ] && [ "$DRY_RUN" = false ]; then
+    echo -e "${YELLOW}${BOLD}Warning:${NC} This will overwrite your current WordPress installation!"
+    echo -e "WordPress path: ${BOLD}$wpPath${NC}"
+    echo -e "Restore type: ${BOLD}$RESTORE_TYPE${NC}"
+    if [ "$RESTORE_TYPE" = "full" ] || [ "$RESTORE_TYPE" = "db" ]; then
+        echo -e "Database backup: ${BOLD}$(basename "$DB_BACKUP_FILE")${NC}"
+    fi
+    if [ "$RESTORE_TYPE" = "full" ] || [ "$RESTORE_TYPE" = "files" ]; then
+        echo -e "Files backup: ${BOLD}$(basename "$FILES_BACKUP_FILE")${NC}"
+    fi
+    echo ""
+    read -p "Are you sure you want to continue? (y/N): " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}Restore operation cancelled by user.${NC}"
+        exit 0
+    fi
+fi
+
+# Download or copy backup files
+if [ "$DRY_RUN" = false ]; then
+    if [ "$RESTORE_TYPE" = "full" ] || [ "$RESTORE_TYPE" = "db" ]; then
+        get_backup_file "$DB_BACKUP_FILE" "$RESTORE_DIR/$(basename "$DB_BACKUP_FILE")" "$BACKUP_SOURCE"
+        check_status $? "Getting database backup file" "Restore"
+    fi
+    
+    if [ "$RESTORE_TYPE" = "full" ] || [ "$RESTORE_TYPE" = "files" ]; then
+        get_backup_file "$FILES_BACKUP_FILE" "$RESTORE_DIR/$(basename "$FILES_BACKUP_FILE")" "$BACKUP_SOURCE"
+        check_status $? "Getting files backup file" "Restore"
+    fi
+else
+    log "INFO" "Dry run: Skipping backup file retrieval"
+fi
+
+# Extract backup files
+if [ "$DRY_RUN" = false ]; then
+    if [ "$RESTORE_TYPE" = "full" ] || [ "$RESTORE_TYPE" = "db" ]; then
+        echo -e "${CYAN}${BOLD}Extracting database backup...${NC}"
+        extract_backup "$RESTORE_DIR/$(basename "$DB_BACKUP_FILE")" "$RESTORE_DIR/DB"
+        check_status $? "Extracting database backup" "Restore"
+    fi
+    
+    if [ "$RESTORE_TYPE" = "full" ] || [ "$RESTORE_TYPE" = "files" ]; then
+        echo -e "${CYAN}${BOLD}Extracting files backup...${NC}"
+        extract_backup "$RESTORE_DIR/$(basename "$FILES_BACKUP_FILE")" "$RESTORE_DIR/Files"
+        check_status $? "Extracting files backup" "Restore"
+    fi
+else
+    log "INFO" "Dry run: Skipping backup extraction"
+fi
+
+# Restore database
+if [ "$DRY_RUN" = false ] && [ "$RESTORE_TYPE" = "full" ] || [ "$RESTORE_TYPE" = "db" ]; then
     echo -e "${CYAN}${BOLD}Restoring database...${NC}"
     
-    if [ "$DRY_RUN" = false ]; then
-        # Extract database backup
-        cd "$TEMP_DIR" || exit 1
-        
-        # Determine compression format and extract accordingly
-        if [[ "$DB_BACKUP" == *.zip ]]; then
-            unzip -q "$DB_BACKUP"
-            check_status $? "Extracting database backup" "Restore"
-        elif [[ "$DB_BACKUP" == *.tar.gz ]]; then
-            tar -xzf "$DB_BACKUP"
-            check_status $? "Extracting database backup" "Restore"
-        elif [[ "$DB_BACKUP" == *.tar ]]; then
-            tar -xf "$DB_BACKUP"
-            check_status $? "Extracting database backup" "Restore"
-        else
-            echo -e "${RED}${BOLD}Error: Unsupported compression format for $DB_BACKUP!${NC}" >&2
-            exit 1
-        fi
-        
-        # Find SQL file
-        SQL_FILE=$(find . -name "*.sql" | head -n 1)
-        
-        if [ -z "$SQL_FILE" ]; then
-            echo -e "${RED}${BOLD}Error: No SQL file found in database backup!${NC}" >&2
-            exit 1
-        fi
-        
-        # Import database
-        wp db import "$SQL_FILE" --path="$wpPath"
-        check_status $? "Importing database" "Restore"
-        
-        log "INFO" "Database restored successfully"
-    else
-        log "INFO" "Dry run: Skipping database restore"
+    # Find SQL file
+    SQL_FILE=$(find "$RESTORE_DIR/DB" -name "*.sql" | head -n 1)
+    if [ -z "$SQL_FILE" ]; then
+        echo -e "${RED}${BOLD}Error: No SQL file found in database backup!${NC}" >&2
+        exit 1
     fi
+    
+    # Import database
+    nice -n "$NICE_LEVEL" wp db import "$SQL_FILE" --path="$wpPath"
+    check_status $? "Database restore" "Restore"
+    
+    log "INFO" "Database restored successfully"
+    echo -e "${GREEN}Database restored successfully!${NC}"
 fi
 
-# Restore files if requested
-if [ "$RESTORE_FILES" = true ] && [ -n "$FILES_BACKUP" ]; then
-    log "INFO" "Restoring files from $(basename "$FILES_BACKUP")"
+# Restore files
+if [ "$DRY_RUN" = false ] && [ "$RESTORE_TYPE" = "full" ] || [ "$RESTORE_TYPE" = "files" ]; then
     echo -e "${CYAN}${BOLD}Restoring files...${NC}"
     
-    if [ "$DRY_RUN" = false ]; then
-        # Extract files backup
-        cd "$TEMP_DIR" || exit 1
-        
-        # Determine compression format and extract accordingly
-        if [[ "$FILES_BACKUP" == *.zip ]]; then
-            unzip -q "$FILES_BACKUP"
-            check_status $? "Extracting files backup" "Restore"
-        elif [[ "$FILES_BACKUP" == *.tar.gz ]]; then
-            tar -xzf "$FILES_BACKUP"
-            check_status $? "Extracting files backup" "Restore"
-        elif [[ "$FILES_BACKUP" == *.tar ]]; then
-            tar -xf "$FILES_BACKUP"
-            check_status $? "Extracting files backup" "Restore"
-        else
-            echo -e "${RED}${BOLD}Error: Unsupported compression format for $FILES_BACKUP!${NC}" >&2
-            exit 1
-        fi
-        
-        # Check if Files directory exists
-        if [ -d "Files" ]; then
-            # Create backup of current files
-            CURRENT_BACKUP="$SCRIPTPATH/current_files_backup_$DIR"
-            mkdir -p "$CURRENT_BACKUP"
-            check_status $? "Creating backup of current files" "Restore"
-            
-            rsync -a "$wpPath/" "$CURRENT_BACKUP/"
-            check_status $? "Backing up current files" "Restore"
-            
-            # Restore files
-            rsync -a --delete "Files/" "$wpPath/"
-            check_status $? "Restoring files" "Restore"
-            
-            log "INFO" "Files restored successfully"
-            log "INFO" "Backup of previous files saved to $CURRENT_BACKUP"
-        else
-            echo -e "${RED}${BOLD}Error: Files directory not found in backup!${NC}" >&2
-            exit 1
-        fi
-    else
-        log "INFO" "Dry run: Skipping files restore"
+    # Check if Files directory exists
+    if [ ! -d "$RESTORE_DIR/Files" ]; then
+        echo -e "${RED}${BOLD}Error: Files directory not found in backup!${NC}" >&2
+        exit 1
     fi
+    
+    # Create backup of wp-config.php if it exists
+    if [ -f "$wpPath/wp-config.php" ]; then
+        cp -v "$wpPath/wp-config.php" "$RESTORE_DIR/wp-config.php.bak"
+        check_status $? "Backing up wp-config.php" "Restore"
+    fi
+    
+    # Sync files (excluding wp-config.php)
+    rsync -a --progress --exclude="wp-config.php" "$RESTORE_DIR/Files/" "$wpPath/"
+    check_status $? "Files restore" "Restore"
+    
+    # Restore wp-config.php from backup if it was backed up
+    if [ -f "$RESTORE_DIR/wp-config.php.bak" ]; then
+        cp -v "$RESTORE_DIR/wp-config.php.bak" "$wpPath/wp-config.php"
+        check_status $? "Restoring wp-config.php" "Restore"
+    fi
+    
+    log "INFO" "Files restored successfully"
+    echo -e "${GREEN}Files restored successfully!${NC}"
 fi
 
-# Clean up
+# Clean up temporary files
 if [ "$DRY_RUN" = false ]; then
-    rm -rf "$TEMP_DIR"
+    echo -e "${CYAN}${BOLD}Cleaning up temporary files...${NC}"
+    rm -rf "$RESTORE_DIR"
     check_status $? "Cleaning up temporary files" "Restore"
 fi
 
-# Complete the restore process
+# Calculate execution time and report success
 END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))
-log "INFO" "Restore process completed successfully in ${DURATION}s"
-update_status "SUCCESS" "Restore process completed in ${DURATION}s"
-notify "SUCCESS" "Restore process completed successfully in ${DURATION}s" "Restore"
+FORMATTED_DURATION=$(format_duration $DURATION)
+log "INFO" "Restore process completed successfully in ${FORMATTED_DURATION}"
+update_status "SUCCESS" "Restore process completed in ${FORMATTED_DURATION}"
 
-echo -e "${GREEN}${BOLD}Restore completed successfully!${NC}"
-echo -e "${GREEN}Time taken: ${NC}${DURATION} seconds"
+echo -e "${GREEN}${BOLD}Restore process completed successfully!${NC}"
+echo -e "${GREEN}Restore source: ${NC}${BACKUP_SOURCE}"
+echo -e "${GREEN}Restore type: ${NC}${RESTORE_TYPE}"
+echo -e "${GREEN}Time taken: ${NC}${FORMATTED_DURATION}"

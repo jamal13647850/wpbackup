@@ -1,7 +1,7 @@
 #!/bin/bash
 # database.sh - WordPress database backup script
 # Author: System Administrator
-# Last updated: 2025-05-16
+# Last updated: 2025-05-17
 
 # Source common functions and variables
 . "$(dirname "$0")/common.sh"
@@ -27,7 +27,7 @@ while getopts "c:f:dlrbv" opt; do
         v) VERBOSE=true;;
         ?)
             echo -e "${RED}${BOLD}Usage:${NC} $0 -c <config_file> [-f <format>] [-d] [-l|-r|-b] [-v]" >&2
-            echo -e "  -c: Configuration file"
+            echo -e "  -c: Configuration file (can be encrypted .conf.gpg or regular .conf)"
             echo -e "  -f: Override compression format (zip, tar.gz, tar)"
             echo -e "  -d: Dry run (no actual changes)"
             echo -e "  -l: Store backup locally only"
@@ -56,10 +56,25 @@ else
     echo -e "${GREEN}Using configuration file: ${BOLD}$(basename "$CONFIG_FILE")${NC}"
 fi
 
-# Source the config file
-. "$CONFIG_FILE"
+# Source the config file - handle both encrypted and regular files
+if [[ "$CONFIG_FILE" =~ \.gpg$ ]]; then
+    if ! command_exists gpg; then
+        echo -e "${RED}${BOLD}Error: gpg is not installed but required for encrypted config files!${NC}" >&2
+        exit 1
+    fi
+    echo -e "${CYAN}Loading encrypted configuration file...${NC}"
+    eval "$(gpg --quiet --decrypt "$CONFIG_FILE" 2>/dev/null)"
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}${BOLD}Error: Failed to decrypt configuration file!${NC}" >&2
+        exit 1
+    fi
+    log "INFO" "Successfully loaded encrypted configuration file: $(basename "$CONFIG_FILE")"
+else
+    . "$CONFIG_FILE"
+    log "INFO" "Successfully loaded configuration file: $(basename "$CONFIG_FILE")"
+fi
 
-# Validate required configuration variables for WordPress path
+# Validate required configuration variables
 for var in wpPath; do
     if [ -z "${!var}" ]; then
         echo -e "${RED}${BOLD}Error: Required variable $var is not set in $CONFIG_FILE!${NC}" >&2
@@ -67,7 +82,7 @@ for var in wpPath; do
     fi
 done
 
-# If backing up remotely or both, validate SSH related configuration variables
+# Check SSH settings if remote backup is enabled
 if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then
     for var in destinationPort destinationUser destinationIP destinationDbBackupPath privateKeyPath; do
         if [ -z "${!var}" ]; then
@@ -77,7 +92,8 @@ if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then
     done
 fi
 
-# Set default directories and options
+# Set default values
+DIR="${DIR:-$(date +%Y%m%d-%H%M%S)}"
 BACKUP_DIR="${BACKUP_DIR:-$SCRIPTPATH/backups}"
 LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-$SCRIPTPATH/local_backups}"
 DEST="$BACKUP_DIR/$DIR"
@@ -91,6 +107,7 @@ DB_FILENAME="${DB_FILE_PREFIX}-${DIR}.${COMPRESSION_FORMAT}"
 # Function to validate SSH connection
 validate_ssh() {
     if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then
+        echo -e "${CYAN}Validating SSH connection...${NC}"
         ssh -p "${destinationPort:-22}" -i "$privateKeyPath" "$destinationUser@$destinationIP" "echo OK" >/dev/null 2>&1
         check_status $? "SSH connection validation" "Database backup"
     fi
@@ -101,7 +118,6 @@ cleanup_database() {
     cleanup "Database backup process" "Database backup"
     rm -rf "$DEST"
 }
-
 trap cleanup_database INT TERM
 
 # Start backup process
@@ -128,22 +144,22 @@ else
     log "INFO" "Dry-run mode enabled: skipping directory creation"
 fi
 
-# Backup database
+# Perform database backup
 if [ "$DRY_RUN" = false ]; then
     mkdir -pv "$DEST/DB"
     check_status $? "Create DB directory" "Database backup"
     cd "$DEST/DB" || exit 1
-    
+
     echo -e "${CYAN}${BOLD}Exporting database...${NC}"
     nice -n "$NICE_LEVEL" wp db export --add-drop-table --path="$wpPath"
     check_status $? "Export database" "Database backup"
-    
+
     cd "$DEST" || exit 1
     log "DEBUG" "Starting database compression"
     echo -e "${CYAN}${BOLD}Compressing database...${NC}"
     compress "DB/" "$DB_FILENAME"
     check_status $? "Compress database files" "Database backup"
-    
+
     echo -e "${CYAN}${BOLD}Cleaning up temporary files...${NC}"
     nice -n "$NICE_LEVEL" rm -rfv DB/
     check_status $? "Clean up DB directory" "Database backup"
@@ -152,7 +168,7 @@ if [ "$DRY_RUN" = false ]; then
     db_size=$(du -h "$DEST/$DB_FILENAME" | cut -f1)
     log "INFO" "Database backup size: $db_size"
 
-    # Store backup according to specified location
+    # Store backup according to selected location
     case $BACKUP_LOCATION in
         local)
             log "INFO" "Saving backup locally to $LOCAL_BACKUP_DIR"
@@ -173,7 +189,7 @@ if [ "$DRY_RUN" = false ]; then
             echo -e "${CYAN}${BOLD}Copying database backup to local storage...${NC}"
             cp -v "$DEST/$DB_FILENAME" "$LOCAL_BACKUP_DIR/"
             check_status $? "Copy database backup to local" "Database backup"
-            
+
             echo -e "${CYAN}${BOLD}Uploading database backup to remote server...${NC}"
             nice -n "$NICE_LEVEL" rsync -azvrh --progress --compress-level=9 "$DEST/$DB_FILENAME" \
                 -e "ssh -p ${destinationPort:-22} -i ${privateKeyPath}" \

@@ -1,7 +1,7 @@
 #!/bin/bash
 # files.sh - WordPress files backup script
 # Author: System Administrator
-# Last updated: 2025-05-16
+# Last updated: 2025-05-17
 
 # Source common functions and variables
 . "$(dirname "$0")/common.sh"
@@ -29,7 +29,7 @@ while getopts "c:f:dlrbiv" opt; do
         v) VERBOSE=true;;
         ?)
             echo -e "${RED}${BOLD}Usage:${NC} $0 -c <config_file> [-f <format>] [-d] [-l|-r|-b] [-i] [-v]" >&2
-            echo -e "  -c: Configuration file"
+            echo -e "  -c: Configuration file (can be encrypted .conf.gpg or regular .conf)"
             echo -e "  -f: Override compression format (zip, tar.gz, tar)"
             echo -e "  -d: Dry run (no actual changes)"
             echo -e "  -l: Store backup locally only"
@@ -59,13 +59,28 @@ else
     echo -e "${GREEN}Using configuration file: ${BOLD}$(basename "$CONFIG_FILE")${NC}"
 fi
 
-# Source the config file
-. <(load_config "$CONFIG_FILE")
+# Source the config file - handle both encrypted and regular files
+if [[ "$CONFIG_FILE" =~ \.gpg$ ]]; then
+    if ! command_exists gpg; then
+        echo -e "${RED}${BOLD}Error: gpg is not installed but required for encrypted config files!${NC}" >&2
+        exit 1
+    fi
+    echo -e "${CYAN}Loading encrypted configuration file...${NC}"
+    eval "$(gpg --quiet --decrypt "$CONFIG_FILE" 2>/dev/null)"
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}${BOLD}Error: Failed to decrypt configuration file!${NC}" >&2
+        exit 1
+    fi
+    log "INFO" "Successfully loaded encrypted configuration file: $(basename "$CONFIG_FILE")"
+else
+    . "$CONFIG_FILE"
+    log "INFO" "Successfully loaded configuration file: $(basename "$CONFIG_FILE")"
+fi
 
-# Set backup location - command line takes precedence, default is "both"
+# Set backup location from command line or config file
 BACKUP_LOCATION="${CLI_BACKUP_LOCATION:-both}"
 
-# Validate required configuration variables for WordPress path
+# Validate required configuration variables
 for var in wpPath; do
     if [ -z "${!var}" ]; then
         echo -e "${RED}${BOLD}Error: Required variable $var is not set in $CONFIG_FILE!${NC}" >&2
@@ -73,7 +88,7 @@ for var in wpPath; do
     fi
 done
 
-# If backing up remotely or both, validate SSH related configuration variables
+# Check SSH settings if remote backup is enabled
 if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then
     for var in destinationPort destinationUser destinationIP destinationFilesBackupPath privateKeyPath; do
         if [ -z "${!var}" ]; then
@@ -83,7 +98,8 @@ if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then
     done
 fi
 
-# Set default directories and options
+# Set default values
+DIR="${DIR:-$(date +%Y%m%d-%H%M%S)}"
 BACKUP_DIR="${BACKUP_DIR:-$SCRIPTPATH/backups}"
 LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-$SCRIPTPATH/local_backups}"
 DEST="$BACKUP_DIR/$DIR"
@@ -96,7 +112,7 @@ LOG_LEVEL="${LOG_LEVEL:-normal}"
 FILES_FILENAME="${FILES_FILE_PREFIX}-${DIR}.${COMPRESSION_FORMAT}"
 LAST_BACKUP_FILE="$SCRIPTPATH/last_files_backup.txt"
 
-# Process exclude patterns for rsync
+# Process exclude patterns
 EXCLUDE_ARGS=""
 IFS=',' read -ra PATTERNS <<< "$EXCLUDE_PATTERNS"
 for pattern in "${PATTERNS[@]}"; do
@@ -105,8 +121,11 @@ done
 
 # Function to validate SSH connection
 validate_ssh() {
-    ssh -p "${destinationPort:-22}" -i "$privateKeyPath" "$destinationUser@$destinationIP" "echo OK" >/dev/null 2>&1
-    check_status $? "SSH connection validation" "Files backup"
+    if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then
+        echo -e "${CYAN}Validating SSH connection...${NC}"
+        ssh -p "${destinationPort:-22}" -i "$privateKeyPath" "$destinationUser@$destinationIP" "echo OK" >/dev/null 2>&1
+        check_status $? "SSH connection validation" "Files backup"
+    fi
 }
 
 # Function for cleanup operations
@@ -114,7 +133,6 @@ cleanup_files() {
     cleanup "Files backup process" "Files backup"
     rm -rf "$DEST"
 }
-
 trap cleanup_files INT TERM
 
 # Start backup process
@@ -141,29 +159,30 @@ else
     log "INFO" "Dry-run mode enabled: skipping directory creation"
 fi
 
-# Check for previous backup for incremental mode
-LAST_BACKUP=""
-if [ "$INCREMENTAL" = true ] && [ -f "$LAST_BACKUP_FILE" ]; then
-    LAST_BACKUP=$(cat "$LAST_BACKUP_FILE")
-    log "INFO" "Using last backup as reference for incremental: $LAST_BACKUP"
-elif [ "$INCREMENTAL" = true ]; then
-    log "WARNING" "No previous backup found, falling back to full files backup"
-    INCREMENTAL=false
-fi
-
-# Backup files
+# Perform files backup
 if [ "$DRY_RUN" = false ]; then
     mkdir -pv "$DEST/Files"
     check_status $? "Create Files directory" "Files backup"
     
-    echo -e "${CYAN}${BOLD}Backing up files...${NC}"
-    if [ "$INCREMENTAL" = true ] && [ -n "$LAST_BACKUP" ]; then
-        eval "nice -n \"$NICE_LEVEL\" rsync -av --progress --max-size=\"${maxSize:-50m}\" $EXCLUDE_ARGS --link-dest=\"$LAST_BACKUP/Files\" \"$wpPath/\" \"$DEST/Files/\""
-        check_status $? "Incremental files backup with rsync" "Files backup"
+    # Determine rsync options based on incremental flag
+    RSYNC_OPTS="-avrh --progress --max-size=\"${maxSize:-50m}\""
+    
+    if [ "$INCREMENTAL" = true ] && [ -f "$LAST_BACKUP_FILE" ] && [ -d "$(cat "$LAST_BACKUP_FILE" 2>/dev/null)" ]; then
+        LAST_BACKUP=$(cat "$LAST_BACKUP_FILE")
+        log "INFO" "Using incremental backup from $LAST_BACKUP"
+        echo -e "${CYAN}${BOLD}Performing incremental files backup...${NC}"
+        RSYNC_OPTS="$RSYNC_OPTS --link-dest=$LAST_BACKUP/Files"
     else
-        eval "nice -n \"$NICE_LEVEL\" rsync -av --progress --max-size=\"${maxSize:-50m}\" $EXCLUDE_ARGS \"$wpPath/\" \"$DEST/Files/\""
-        check_status $? "Full files backup with rsync" "Files backup"
+        log "INFO" "Performing full files backup"
+        echo -e "${CYAN}${BOLD}Performing full files backup...${NC}"
     fi
+    
+    # Execute rsync with all options
+    eval nice -n "$NICE_LEVEL" rsync $RSYNC_OPTS $EXCLUDE_ARGS "$wpPath/" "$DEST/Files/"
+    check_status $? "Rsync files" "Files backup"
+    
+    # Save current backup path for future incremental backups
+    echo "$DEST" > "$LAST_BACKUP_FILE"
     
     cd "$DEST" || exit 1
     log "DEBUG" "Starting files compression"
@@ -174,16 +193,12 @@ if [ "$DRY_RUN" = false ]; then
     echo -e "${CYAN}${BOLD}Cleaning up temporary files...${NC}"
     nice -n "$NICE_LEVEL" rm -rfv Files/
     check_status $? "Clean up Files directory" "Files backup"
-
+    
     # Get files backup size
     files_size=$(du -h "$DEST/$FILES_FILENAME" | cut -f1)
     log "INFO" "Files backup size: $files_size"
-
-    # Update last backup reference for incremental backups
-    echo "$DEST" > "$LAST_BACKUP_FILE"
-    log "INFO" "Updated last backup reference to $DEST"
-
-    # Store backup according to specified location
+    
+    # Store backup according to selected location
     case $BACKUP_LOCATION in
         local)
             log "INFO" "Saving backup locally to $LOCAL_BACKUP_DIR"
