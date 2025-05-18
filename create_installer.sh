@@ -88,9 +88,12 @@ if [ ! -d "$wpPath" ]; then
 fi
 
 # Check if wp-config.php exists
-if [ ! -f "$wpPath/wp-config.php" ]; then
-    echo -e "${RED}${BOLD}Error: wp-config.php not found in $wpPath!${NC}" >&2
-    echo -e "${YELLOW}This does not appear to be a valid WordPress installation.${NC}" >&2
+if [ -f "$wpPath/wp-config.php" ]; then
+    WP_CONFIG="$wpPath/wp-config.php"
+elif [ -f "$(dirname "$wpPath")/wp-config.php" ]; then
+    WP_CONFIG="$(dirname "$wpPath")/wp-config.php"
+else
+    echo -e "${RED}${BOLD}Error: wp-config.php not found in $wpPath or its parent directory!${NC}" >&2
     exit 1
 fi
 
@@ -466,15 +469,15 @@ if [ -f "reassemble.sh" ]; then
 else
     # Extract files
     echo -e "${CYAN}${BOLD}Extracting files...${NC}"
-    mkdir -p files_temp
-    tar -xzf files.tar.gz -C files_temp || {
+    mkdir -p files
+    tar -xzf files.tar.gz -C files || {
         echo -e "${RED}${BOLD}Error: Failed to extract files!${NC}" >&2
         exit 1
     }
 fi
 
 echo -e "${CYAN}Moving files to installation directory...${NC}"
-rsync -a files_temp/ "$INSTALL_DIR/" || {
+rsync -a files/ "$INSTALL_DIR/" || {
     echo -e "${RED}${BOLD}Error: Failed to move files!${NC}" >&2
     exit 1
 }
@@ -488,7 +491,7 @@ if [ -d "extra_files" ]; then
 fi
 
 # Clean up extraction files
-rm -rf files_temp files.tar.gz 2>/dev/null
+rm -rf files files.tar.gz 2>/dev/null
 rm -f files.tar.part.* 2>/dev/null
 
 # Create wp-config.php
