@@ -88,7 +88,7 @@ notify() {
     if [ -z "$NOTIFY_METHOD" ]; then
         log "DEBUG" "No notification method configured, skipping notifications"
         return
-    }
+    fi
 
     log "DEBUG" "Sending notifications via: $NOTIFY_METHOD"
     
@@ -218,7 +218,7 @@ select_config_file() {
     if [ ! -d "$config_dir" ]; then
         echo -e "${RED}${BOLD}Error: Config directory $config_dir not found!${NC}" >&2
         return 1
-    }
+    fi
 
     while IFS= read -r file; do
         if [[ "$file" != *".gpg" ]]; then
@@ -237,7 +237,7 @@ select_config_file() {
     if [ ${#configs[@]} -eq 0 ]; then
         echo -e "${RED}${BOLD}Error: No configuration files found in $config_dir!${NC}" >&2
         return 1
-    }
+    fi
 
     echo -e "${GREEN}Select a configuration file by number:${NC}"
     read -p "> " selection
@@ -245,7 +245,7 @@ select_config_file() {
     if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -ge ${#configs[@]} ]; then
         echo -e "${RED}${BOLD}Error: Invalid selection!${NC}" >&2
         return 1
-    }
+    fi
 
     CONFIG_FILE="${configs[$selection]}"
     echo -e "${GREEN}Selected: ${BOLD}$(basename "$CONFIG_FILE")${NC}"
@@ -273,13 +273,13 @@ load_config() {
     if [ ! -f "$config_file" ]; then
         echo "echo -e \"${RED}${BOLD}Error: Configuration file $config_file not found!${NC}\" >&2; exit 1"
         return 1
-    }
+    fi
 
     if [[ "$config_file" =~ \.gpg$ ]]; then
         if ! command -v gpg &>/dev/null; then
             echo "echo -e \"${RED}${BOLD}Error: gpg is not installed but required for encrypted config files!${NC}\" >&2; exit 1"
             return 1
-        }
+        fi
 
         gpg --quiet --decrypt "$config_file" 2>/dev/null
     else
@@ -306,7 +306,7 @@ check_requirements() {
         echo -e "${RED}${BOLD}Error: Required commands not found: ${missing_commands[*]}${NC}" >&2
         echo -e "${YELLOW}Please install the missing packages and try again.${NC}" >&2
         return 1
-    }
+    fi
 
     return 0
 }
@@ -360,7 +360,7 @@ process_config_file() {
     if [ ! -f "$config_file" ]; then
         echo -e "${RED}${BOLD}Error: Configuration file $config_file not found!${NC}" >&2
         exit 1
-    }
+    fi
 
     echo -e "${GREEN}Using configuration file: ${BOLD}$(basename "$config_file")${NC}"
 
@@ -369,13 +369,13 @@ process_config_file() {
         if ! command_exists gpg; then
             echo -e "${RED}${BOLD}Error: gpg is not installed but required for encrypted config files!${NC}" >&2
             exit 1
-        }
+        fi
         echo -e "${CYAN}Loading encrypted configuration file...${NC}"
         eval "$(gpg --quiet --decrypt "$config_file" 2>/dev/null)"
         if [ $? -ne 0 ]; then
             echo -e "${RED}${BOLD}Error: Failed to decrypt configuration file!${NC}" >&2
             exit 1
-        }
+        fi
         log "INFO" "Successfully loaded encrypted configuration file: $(basename "$config_file")"
     else
         . "$config_file"

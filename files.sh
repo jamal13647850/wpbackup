@@ -13,7 +13,7 @@ STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/files_status.log}"
 # Initialize default values
 DRY_RUN=false
 VERBOSE=false
-CLI_BACKUP_LOCATION=""  # Will store command-line specified backup location
+BACKUP_LOCATION=""  # Will store command-line specified backup location
 INCREMENTAL=false
 
 # Parse command line options
@@ -22,9 +22,9 @@ while getopts "c:f:dlrbiv" opt; do
         c) CONFIG_FILE="$OPTARG";;
         f) OVERRIDE_FORMAT="$OPTARG";;
         d) DRY_RUN=true;;
-        l) CLI_BACKUP_LOCATION="local";;
-        r) CLI_BACKUP_LOCATION="remote";;
-        b) CLI_BACKUP_LOCATION="both";;
+        l) BACKUP_LOCATION="local";;
+        r) BACKUP_LOCATION="remote";;
+        b) BACKUP_LOCATION="both";;
         i) INCREMENTAL=true;;
         v) VERBOSE=true;;
         ?)
@@ -77,8 +77,7 @@ else
     log "INFO" "Successfully loaded configuration file: $(basename "$CONFIG_FILE")"
 fi
 
-# Set backup location from command line or config file
-BACKUP_LOCATION="${CLI_BACKUP_LOCATION:-both}"
+
 
 # Validate required configuration variables
 for var in wpPath; do
