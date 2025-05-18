@@ -5,8 +5,8 @@
 . "$(dirname "$0")/common.sh"
 
 # Set log files
-LOG_FILE="$SCRIPTPATH/monitor.log"
-STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/monitor_status.log}"
+LOG_FILE="$SCRIPTPATH/logs/monitor.log"
+STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/monitor_status.log}"
 
 # Default values
 VERBOSE=false

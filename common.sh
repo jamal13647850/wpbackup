@@ -14,8 +14,8 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 
-LOG_FILE="${LOG_FILE:-$SCRIPTPATH/script.log}"
-STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/status.log}"
+LOG_FILE="${LOG_FILE:-$SCRIPTPATH/logs/script.log}"
+STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/status.log}"
 
 
 log() {

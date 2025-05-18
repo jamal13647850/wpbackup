@@ -4,8 +4,8 @@
 
 . "$(dirname "$0")/common.sh"
 
-LOG_FILE="$SCRIPTPATH/gfbackup.log"
-STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/gfbackup_status.log}"
+LOG_FILE="$SCRIPTPATH/logs/gfbackup.log"
+STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/gfbackup_status.log}"
 
 # Parse command line options
 DRY_RUN=false

@@ -6,8 +6,8 @@
 # Default values
 SAFE_PATHS=("/var/backups" "/home/backup" "$SCRIPTPATH/backups")
 ARCHIVE_EXTS=("zip" "tar" "tar.gz" "tgz" "gz" "bz2" "xz" "7z")
-LOG_FILE="$SCRIPTPATH/remove_old.log"
-STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/remove_old_status.log}"
+LOG_FILE="$SCRIPTPATH/logs/remove_old.log"
+STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/remove_old_status.log}"
 MAX_LOG_SIZE=$((200*1024*1024))
 DRY_RUN=false
 VERBOSE=false

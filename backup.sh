@@ -7,9 +7,9 @@
 . "$(dirname "$0")/common.sh"
 
 # Set log files for this script
-LOG_FILE="$SCRIPTPATH/backup.log"
-STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/backup_status.log}"
-LAST_BACKUP_FILE="$SCRIPTPATH/last_backup.txt"
+LOG_FILE="$SCRIPTPATH/logs/backup.log"
+STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/backup_status.log}"
+LAST_BACKUP_FILE="$SCRIPTPATH/logs/last_backup.txt"
 
 # Initialize default values
 DRY_RUN=false

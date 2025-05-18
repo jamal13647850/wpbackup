@@ -7,8 +7,8 @@
 . "$(dirname "$0")/common.sh"
 
 # Set log files for this script
-LOG_FILE="$SCRIPTPATH/backup_all.log"
-STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/backup_all_status.log}"
+LOG_FILE="$SCRIPTPATH/logs/backup_all.log"
+STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/backup_all_status.log}"
 
 # Initialize default values
 VERBOSE=false

@@ -7,8 +7,8 @@
 . "$(dirname "$0")/common.sh"
 
 # Set log files for this script
-LOG_FILE="$SCRIPTPATH/files.log"
-STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/files_status.log}"
+LOG_FILE="$SCRIPTPATH/logs/files.log"
+STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/files_status.log}"
 
 # Initialize default values
 DRY_RUN=false

@@ -7,8 +7,8 @@
 SCRIPTPATH="$( cd "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
 . "$SCRIPTPATH/common.sh"
 
-LOG_FILE="$SCRIPTPATH/create_installer.log"
-STATUS_LOG="$SCRIPTPATH/create_installer_status.log"
+LOG_FILE="$SCRIPTPATH/logs/create_installer.log"
+STATUS_LOG="$SCRIPTPATH/logs/create_installer_status.log"
 TEMP_DIR="$SCRIPTPATH/temp_installer"
 INSTALLER_DIR="$SCRIPTPATH/installers"
 DIR=$(date +"%Y%m%d-%H%M%S")
