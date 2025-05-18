@@ -12,8 +12,8 @@ STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/monitor_status.log}"
 VERBOSE=false
 ALERT_ONLY=false
 QUIET=false
-REPORT_FILE="$SCRIPTPATH/monitor_report.txt"
-METRICS_FILE="$SCRIPTPATH/monitor_metrics.csv"
+REPORT_FILE="$SCRIPTPATH/logs/monitor_report.txt"
+METRICS_FILE="$SCRIPTPATH/logs/monitor_metrics.csv"
 THRESHOLD_FILE=""
 DRY_RUN=false
 
@@ -95,9 +95,13 @@ for var in wpPath; do
     fi
 done
 
-# Check if WordPress exists
-if [ ! -f "$wpPath/wp-config.php" ]; then
-    echo -e "${RED}${BOLD}Error: WordPress not found at $wpPath!${NC}" >&2
+# Check if wp-config.php exists in wpPath or one directory above it
+if [ -f "$wpPath/wp-config.php" ]; then
+    WP_CONFIG="$wpPath/wp-config.php"
+elif [ -f "$(dirname "$wpPath")/wp-config.php" ]; then
+    WP_CONFIG="$(dirname "$wpPath")/wp-config.php"
+else
+    echo -e "${RED}${BOLD}Error: wp-config.php not found in $wpPath or its parent directory!${NC}" >&2
     exit 1
 fi
 
@@ -520,7 +524,7 @@ check_wp_security() {
         fi
         
         # Check if debug mode is enabled
-        if grep -q "define.*WP_DEBUG.*true" "$wp_path/wp-config.php"; then
+        if grep -q "define.*WP_DEBUG.*true" "$WP_CONFIG"; then
             echo "  [WARNING] WP_DEBUG is enabled in production!" >> "$REPORT_FILE"
             log "WARNING" "WP_DEBUG is enabled in production"
             
@@ -532,7 +536,7 @@ check_wp_security() {
         fi
         
         # Check if file editing is enabled
-        if ! grep -q "define.*DISALLOW_FILE_EDIT.*true" "$wp_path/wp-config.php"; then
+        if ! grep -q "define.*DISALLOW_FILE_EDIT.*true" "$WP_CONFIG"; then
             echo "  [WARNING] DISALLOW_FILE_EDIT is not set" >> "$REPORT_FILE"
             log "WARNING" "DISALLOW_FILE_EDIT is not set"
             
