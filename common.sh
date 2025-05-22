@@ -436,5 +436,14 @@ extract_backup() {
     return $?
 }
 
+# Exec WP CLI as current user or with --allow-root if root
+wp_cli() {
+    local args=("$@")
+    if [ "$EUID" -eq 0 ]; then
+        nice -n "$NICE_LEVEL" wp "${args[@]}" --allow-root
+    else
+        nice -n "$NICE_LEVEL" wp "${args[@]}"
+    fi
+}
 
 trap 'cleanup "Script" "Process"' INT TERM

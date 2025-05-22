@@ -156,7 +156,7 @@ if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "db" ]; then
         check_status $? "Creating DB directory" "Backup"
         cd "$DEST/DB" || exit 1
         echo -e "${CYAN}${BOLD}Exporting database...${NC}"
-        nice -n "$NICE_LEVEL" wp db export --add-drop-table --path="$wpPath"
+        nice -n "$NICE_LEVEL" wp_cli db export --add-drop-table --path="$wpPath"
         check_status $? "Full database export" "Backup"
         cd "$DEST" || exit 1
         log "DEBUG" "Starting database compression"

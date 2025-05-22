@@ -151,7 +151,7 @@ if [ "$DRY_RUN" = false ]; then
     cd "$DEST/DB" || exit 1
 
     echo -e "${CYAN}${BOLD}Exporting database...${NC}"
-    nice -n "$NICE_LEVEL" wp db export --add-drop-table --path="$wpPath"
+    wp_cli db export --add-drop-table --path="$wpPath"
     check_status $? "Export database" "Database backup"
 
     cd "$DEST" || exit 1
