@@ -664,6 +664,7 @@ show_menu() {
     echo -e "${CYAN}6. Encrypt configuration file${NC}"
     echo -e "${CYAN}7. Decrypt configuration file${NC}"
     echo -e "${CYAN}8. Test configuration file${NC}"
+    echo -e "${CYAN}9. Set up cleanup cron job (Remove old backups/logs)${NC}"
     echo -e "${CYAN}0. Exit${NC}"
     echo
     read -p "Enter your choice: " choice
@@ -713,6 +714,10 @@ show_menu() {
         test_config
         read -p "Press Enter to continue..."
         ;;
+    9)
+        setup_cleanup_cron
+        read -p "Press Enter to continue..."
+        ;;
     0)
         echo -e "${GREEN}${BOLD}Exiting setup. Goodbye!${NC}"
         exit 0
@@ -727,6 +732,130 @@ show_menu() {
 check_requirements "ssh" "rsync" || {
     echo -e "${RED}${BOLD}Please install the required packages and run the script again.${NC}" >&2
     exit 1
+}
+
+setup_cleanup_cron() {
+  echo -e "${CYAN}${BOLD}Setting up cron job for backup cleanup (remove old backups/logs)...${NC}"
+  echo -e "${GREEN}Available configuration files:${NC}"
+
+  configs=()
+  i=0
+  while IFS= read -r file; do
+    if [[ "$file" != *".gpg" ]]; then
+      configs+=("$file")
+      echo -e "[$i] ${CYAN}$(basename "$file")${NC}"
+      ((i++))
+    fi
+  done < <(find "$SCRIPTPATH/configs" -type f -name "*.conf" | sort)
+  while IFS= read -r file; do
+    configs+=("$file")
+    echo -e "[$i] ${PURPLE}$(basename "$file") (encrypted)${NC}"
+    ((i++))
+  done < <(find "$SCRIPTPATH/configs" -type f -name "*.conf.gpg" | sort)
+  if [ ${#configs[@]} -eq 0 ]; then
+    echo -e "${RED}${BOLD}Error: No configuration files found!${NC}" >&2
+    echo -e "${YELLOW}Please create a configuration file first.${NC}"
+    return 1
+  fi
+  echo -e "${GREEN}Select a configuration file by number:${NC}"
+  read -p "> " selection
+  if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -ge ${#configs[@]} ]; then
+    echo -e "${RED}${BOLD}Error: Invalid selection!${NC}" >&2
+    return 1
+  fi
+  CONFIG_FILE="${configs[$selection]}"
+  config_name=$(basename "$CONFIG_FILE" | sed 's/\..*//')
+  echo -e "${GREEN}Selected: ${BOLD}$(basename "$CONFIG_FILE")${NC}"
+
+  if [[ "$CONFIG_FILE" =~ \.gpg$ ]]; then
+    echo -e "${YELLOW}Warning: Running removeOld.sh with an encrypted .gpg config. اطمینان حاصل کنید که رمز صحیح در دسترس است.${NC}"
+  fi
+
+  echo -e "${GREEN}Choose cleanup schedule:${NC}"
+  echo -e "[1] Daily"
+  echo -e "[2] Weekly"
+  echo -e "[3] Monthly"
+  echo -e "[4] Custom"
+  read -p "> " schedule_option
+
+  case $schedule_option in
+    1)
+      read -p "Enter hour (0-23, default: 2): " hour
+      hour="${hour:-2}"
+      read -p "Enter minute (0-59, default: 15): " minute
+      minute="${minute:-15}"
+      cron_time="$minute $hour * * *"
+      schedule_desc="daily at $hour:$minute"
+      ;;
+    2)
+      read -p "Enter day of week (0-6, where 0=Sunday, default: 0): " day_of_week
+      day_of_week="${day_of_week:-0}"
+      read -p "Enter hour (0-23, default: 2): " hour
+      hour="${hour:-2}"
+      read -p "Enter minute (0-59, default: 15): " minute
+      minute="${minute:-15}"
+      cron_time="$minute $hour * * $day_of_week"
+      case $day_of_week in
+        0) day_name="Sunday";;
+        1) day_name="Monday";;
+        2) day_name="Tuesday";;
+        3) day_name="Wednesday";;
+        4) day_name="Thursday";;
+        5) day_name="Friday";;
+        6) day_name="Saturday";;
+      esac
+      schedule_desc="weekly on $day_name at $hour:$minute"
+      ;;
+    3)
+      read -p "Enter day of month (1-31, default: 1): " day_of_month
+      day_of_month="${day_of_month:-1}"
+      read -p "Enter hour (0-23, default: 2): " hour
+      hour="${hour:-2}"
+      read -p "Enter minute (0-59, default: 15): " minute
+      minute="${minute:-15}"
+      cron_time="$minute $hour $day_of_month * *"
+      schedule_desc="monthly on day $day_of_month at $hour:$minute"
+      ;;
+    4)
+      read -p "Enter custom cron schedule (e.g., '15 2 * * 0'): " cron_time
+      schedule_desc="custom schedule: $cron_time"
+      ;;
+    *)
+      echo -e "${RED}${BOLD}Error: Invalid option!${NC}" >&2
+      return 1
+      ;;
+  esac
+
+  read -p "Add with dry-run for test? (y/n, default: n): " dry
+  dry_flag=""
+  if [[ "$dry" == [yY] ]]; then
+    dry_flag="-d"
+    schedule_desc="$schedule_desc (dry-run)"
+  fi
+
+  apply_config_permissions "$CONFIG_FILE"
+  if [ "$(stat -c '%U' "$CONFIG_FILE" 2>/dev/null)" == "root" ] && [ "$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null)" == "600" ]; then
+    CRON="sudo crontab"
+    echo -e "${YELLOW}The cron job will be installed for root as the config file is only readable by root!${NC}"
+  else
+    CRON="crontab"
+    echo -e "${YELLOW}WARNING: The config file is not root 600; ensure only privileged users can read.${NC}"
+  fi
+
+  cron_command="$cron_time cd $SCRIPTPATH && ./removeOld.sh -c \"$CONFIG_FILE\" $dry_flag > /dev/null 2>&1"
+
+  ($CRON -l 2>/dev/null || echo "") | grep -v "removeOld.sh -c \"$CONFIG_FILE\"" | { cat; echo "$cron_command"; } | $CRON -
+
+  if [ $? -eq 0 ]; then
+    echo -e "${GREEN}${BOLD}Cleanup cron job added successfully!${NC}"
+    echo -e "${GREEN}Schedule: ${NC}$schedule_desc"
+    echo -e "${GREEN}Configuration: ${NC}$(basename "$CONFIG_FILE")"
+  else
+    echo -e "${RED}${BOLD}Error: Failed to add cleanup cron job!${NC}" >&2
+    return 1
+  fi
+
+  return 0
 }
 
 while true; do
