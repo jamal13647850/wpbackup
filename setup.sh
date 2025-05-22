@@ -73,147 +73,295 @@ set_permissions() {
     return 0
 }
 
+
 create_config() {
+
     local config_name="$1"
+
     local config_file="$SCRIPTPATH/configs/$config_name.conf"
+
     local notify_email=""
+
     local slack_webhook=""
+
     local telegram_token=""
+
     local telegram_chat_id=""
+
     if [ -f "$config_file" ]; then
+
         echo -e "${YELLOW}${BOLD}Warning: Configuration file $config_name.conf already exists.${NC}"
+
         read -p "Do you want to overwrite it? (y/n): " confirm
+
         if [[ "$confirm" != [yY] ]]; then
+
             echo -e "${YELLOW}Configuration creation aborted.${NC}"
+
             return 0
+
         fi
+
     fi
+
 
     echo -e "${CYAN}${BOLD}Creating a new configuration file: $config_name.conf${NC}"
 
+
     echo -e "${GREEN}Enter SSH settings:${NC}"
+
     read -p "SSH Port (default: 22): " ssh_port
+
     ssh_port="${ssh_port:-22}"
+
     read -p "SSH Username: " ssh_user
+
     while [ -z "$ssh_user" ]; do
+
         echo -e "${YELLOW}SSH Username cannot be empty.${NC}"
+
         read -p "SSH Username: " ssh_user
+
     done
+
     read -p "SSH Server IP: " ssh_ip
+
     while [ -z "$ssh_ip" ]; do
+
         echo -e "${YELLOW}SSH Server IP cannot be empty.${NC}"
+
         read -p "SSH Server IP: " ssh_ip
+
     done
+
     read -p "Remote DB Backup Path: " db_path
+
     while [ -z "$db_path" ]; do
+
         echo -e "${YELLOW}Remote DB Backup Path cannot be empty.${NC}"
+
         read -p "Remote DB Backup Path: " db_path
+
     done
+
     read -p "Remote Files Backup Path: " files_path
+
     while [ -z "$files_path" ]; do
+
         echo -e "${YELLOW}Remote Files Backup Path cannot be empty.${NC}"
+
         read -p "Remote Files Backup Path: " files_path
+
     done
+
     read -p "SSH Private Key Path (default: ~/.ssh/id_rsa): " key_path
+
     key_path="${key_path:-$HOME/.ssh/id_rsa}"
 
+
     echo -e "${GREEN}Enter WordPress settings:${NC}"
+
     read -p "WordPress Path (absolute): " wp_path
+
     while [ -z "$wp_path" ]; do
+
         echo -e "${YELLOW}WordPress Path cannot be empty.${NC}"
+
         read -p "WordPress Path: " wp_path
+
     done
+
     read -p "Max File Size for Backup (default: 50m): " max_size
+
     max_size="${max_size:-50m}"
+
     read -p "Backup directory base path for local backups (default: $SCRIPTPATH/local_backups): " local_backup_dir
+
     local_backup_dir="${local_backup_dir:-$SCRIPTPATH/local_backups}"
 
+
     echo -e "${GREEN}Enter advanced backup naming and compression settings:${NC}"
+
     read -p "Backup folder name format (default: date +%Y%m%d-%H%M%S): " dir_name_fmt
+
     dir_name_fmt="${dir_name_fmt:-\$(date +%Y%m%d-%H%M%S)}"
+
     read -p "Database backup file prefix (default: DB): " db_file_prefix
+
     db_file_prefix="${db_file_prefix:-DB}"
+
     read -p "Files backup file prefix (default: Files): " files_file_prefix
+
     files_file_prefix="${files_file_prefix:-Files}"
+
     read -p "Compression format [zip, tar.gz, tar] (default: tar.gz): " compression_format
+
     compression_format="${compression_format:-tar.gz}"
 
+
     echo -e "${GREEN}Backup Storage Location (for scripts with storage mode selection):${NC}"
+
     read -p "Backup storage location? [local/remote/both] (default: both): " backup_location
+
     backup_location="${backup_location:-both}"
 
+
     echo -e "${GREEN}Enter file/folder patterns to exclude from backups (comma-separated, default: wp-staging,*.log,cache,wpo-cache,wp-content/cache,wp-content/debug.log):${NC}"
+
     read -p "Exclude Patterns: " exclude_patterns
+
     exclude_patterns="${exclude_patterns:-wp-staging,*.log,cache,wpo-cache,wp-content/cache,wp-content/debug.log}"
 
+
+    # --- Old file removal and cleanup settings + new disk based options:
+
     echo -e "${GREEN}Backup removal and cleanup settings for old files:${NC}"
+
     read -p "Main path (fullPath) for backup removal (default: $local_backup_dir): " full_path
+
     full_path="${full_path:-$local_backup_dir}"
+
     read -p "Retention (days to keep old backups) (default: 30): " retention
+
     retention="${retention:-30}"
+
     read -p "Log file max size for deletion in MB (default: 200): " max_log_size
+
     max_log_size="${max_log_size:-200}"
+
     let max_log_size_bytes=max_log_size*1024*1024
+
     read -p "Allowed archive extensions to clean-up (comma-separated, default: zip,tar,tar.gz,tgz,gz,bz2,xz,7z): " archive_exts
+
     archive_exts="${archive_exts:-zip,tar,tar.gz,tgz,gz,bz2,xz,7z}"
+
     read -p "Safe paths (comma-separated, default: $local_backup_dir,/var/backups,/home/backup): " safe_paths
+
     safe_paths="${safe_paths:-$local_backup_dir,/var/backups,/home/backup}"
 
+
+    # New advanced cleanup logic:
+
+    echo -e "${GREEN}Advanced backup cleanup options (disk space based deletion):${NC}"
+
+    read -p "Enable disk free space cleanup? (y/n, default: n): " disk_free_enable
+
+    disk_free_enable="${disk_free_enable:-n}"
+
+    read -p "Minimum free disk space to keep in GB (ignored if not enabled, default: 20): " disk_min_free_gb
+
+    disk_min_free_gb="${disk_min_free_gb:-20}"
+
+    echo -e "${CYAN}Choose cleanup mode:${NC} [time] Only by retention, [space] Only disk free space, [both] Both (remove files older than retention only if disk free < minimum)"
+
+    read -p "Cleanup mode [time|space|both] (default: time): " cleanup_mode
+
+    cleanup_mode="${cleanup_mode:-time}"
+
+    # ---
+
+
     echo -e "${GREEN}Enter performance settings:${NC}"
+
     read -p "Nice Level (0-19, default: 19): " nice_level
+
     nice_level="${nice_level:-19}"
 
+
     echo -e "${GREEN}Enter notification settings:${NC}"
+
     read -p "Notification Methods (comma-separated: email,slack,telegram): " notify_method
+
     if [[ "$notify_method" == *"email"* ]]; then
+
         read -p "Email Address for Notifications: " notify_email
-    fi
-    if [[ "$notify_method" == *"slack"* ]]; then
-        read -p "Slack Webhook URL: " slack_webhook
-    fi
-    if [[ "$notify_method" == *"telegram"* ]]; then
-        read -p "Telegram Bot Token: " telegram_token
-        read -p "Telegram Chat ID: " telegram_chat_id
+
     fi
 
+    if [[ "$notify_method" == *"slack"* ]]; then
+
+        read -p "Slack Webhook URL: " slack_webhook
+
+    fi
+
+    if [[ "$notify_method" == *"telegram"* ]]; then
+
+        read -p "Telegram Bot Token: " telegram_token
+
+        read -p "Telegram Chat ID: " telegram_chat_id
+
+    fi
+
+
     cat > "$config_file" << EOF
+# ===================== WordPress Backup Configuration File =====================
+# -- WordPress Settings --
 wpPath="$wp_path"
+
+# -- Backup folder naming --
 DIR=${dir_name_fmt}
+
+# -- Local backups --
 LOCAL_BACKUP_DIR="$local_backup_dir"
+
+# -- Backup destination settings --
 destinationUser="$ssh_user"
 destinationIP="$ssh_ip"
 destinationPort="$ssh_port"
 destinationDbBackupPath="$db_path"
 destinationFilesBackupPath="$files_path"
 privateKeyPath="$key_path"
+
+# -- File naming and compression --
 DB_FILE_PREFIX="$db_file_prefix"
 FILES_FILE_PREFIX="$files_file_prefix"
 COMPRESSION_FORMAT="$compression_format"
+
+# -- Storage selection --
 BACKUP_LOCATION="$backup_location"
+
+# -- Backup process settings --
 NICE_LEVEL="$nice_level"
 EXCLUDE_PATTERNS="$exclude_patterns"
 maxSize="$max_size"
+
+# -- Notifications --
 NOTIFY_METHOD="$notify_method"
 NOTIFY_EMAIL="$notify_email"
 SLACK_WEBHOOK_URL="$slack_webhook"
 TELEGRAM_BOT_TOKEN="$telegram_token"
 TELEGRAM_CHAT_ID="$telegram_chat_id"
+
+# =============== Removal/Cleanup Settings (removeOld) ===============
 fullPath="$full_path"
 BACKUP_RETAIN_DURATION=$retention
 MAX_LOG_SIZE=$max_log_size_bytes
 ARCHIVE_EXTS="$archive_exts"
 SAFE_PATHS="$safe_paths"
+DISK_FREE_ENABLE="$disk_free_enable"
+DISK_MIN_FREE_GB="$disk_min_free_gb"
+CLEANUP_MODE="$cleanup_mode"
+
 EOF
 
+
     apply_config_permissions "$config_file"
+
     echo -e "${GREEN}${BOLD}Configuration file created: $config_file${NC}"
+
     echo -e "${YELLOW}${BOLD}SECURITY NOTICE:${NC} The config file permissions are set to 600 and root only; never share this file. Only use the unencrypted (.conf) file for cron jobs. Do NOT use encrypted (.gpg) configs in cron jobs!${NC}"
 
+
     read -p "Do you want to encrypt this configuration file? (y/n): " encrypt
+
     if [[ "$encrypt" == [yY] ]]; then
+
         encrypt_single_config "$config_file"
+
     fi
+
     return 0
+
 }
 
 encrypt_config() {
