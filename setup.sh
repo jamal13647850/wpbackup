@@ -669,7 +669,7 @@ setup_cron() {
 
     # Construct the cron command
     # The "> /dev/null 2>&1" silences cron output unless errors are specifically logged by the script itself
-    local cron_job_command="$cron_time cd \"$SCRIPTPATH\" && ./$backup_script_name -c \"$CONFIG_FILE\" $incremental_flag $location_flag_input > /dev/null 2>&1"
+    local cron_job_command="$cron_time cd \"$SCRIPTPATH\" && ./$backup_script_name -c \"$CONFIG_FILE\" -q $incremental_flag $location_flag_input > /dev/null 2>&1"
     
     # Construct the specific pattern to remove for the current script and config file.
     # This ensures we only remove/replace the exact cron job being configured.
