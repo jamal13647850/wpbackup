@@ -1,284 +1,358 @@
 #!/bin/bash
-# File: files.sh
+#
+# Script: files.sh
+# Author: Sayyed Jamal Ghasemi
+# Email: jamal13647850@gmail.com
+# LinkedIn: https://www.linkedin.com/in/jamal1364/
+# Instagram: https://www.instagram.com/jamal13647850
+# Telegram: https://t.me/jamaldev
+# Website: https://jamalghasemi.com
+# Date: 2025-05-24
+#
+# Description: Performs WordPress files backup with options for incremental, local/remote storage, and custom naming.
 
-. "$(dirname "$0")/common.sh" # [cite: 180]
+# Source common functions and variables
+. "$(dirname "$0")/common.sh"
 
-LOG_FILE="$SCRIPTPATH/logs/files.log" # [cite: 180]
-STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/files_status.log}" # [cite: 180]
+# --- Script specific variables ---
+LOG_FILE="$SCRIPTPATH/logs/files.log" # Log file for this script
+STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/files_status.log}" # Status log for this script
 
-DRY_RUN=false # [cite: 180]
-VERBOSE=false # [cite: 180]
-QUIET=false # Added
-BACKUP_LOCATION=""  # Will store command-line specified backup location [cite: 180]
-INCREMENTAL=false # [cite: 180]
-NAME_SUFFIX="" # For custom filename suffix
+# --- Default values for options ---
+DRY_RUN=false
+VERBOSE=false
+QUIET=false               # Suppress non-essential output
+BACKUP_LOCATION=""        # CLI override for backup location (local, remote, both); config is default
+INCREMENTAL=false         # Perform incremental file backup
+NAME_SUFFIX=""            # Optional custom suffix for the backup filename
 
 # Parse command line options
-while getopts "c:f:dlrbiqn:v" opt; do # Added 'q' and 'n:'
+while getopts "c:f:dlrbiqn:v" opt; do
     case $opt in
-        c) CONFIG_FILE="$OPTARG";; # [cite: 181]
-        f) OVERRIDE_FORMAT="$OPTARG";; # [cite: 181]
-        d) DRY_RUN=true;; # [cite: 181]
-        l) BACKUP_LOCATION="local";; # [cite: 182]
-        r) BACKUP_LOCATION="remote";; # [cite: 182]
-        b) BACKUP_LOCATION="both";; # [cite: 182]
-        i) INCREMENTAL=true;; # [cite: 182]
-        q) QUIET=true;; # Added
-        n) NAME_SUFFIX="$OPTARG";; # Added
-        v) VERBOSE=true;; # [cite: 182]
-        \?) # [cite: 183]
-            echo -e "${RED}${BOLD}Usage:${NC} $0 -c <config_file> [-f <format>] [-d] [-l|-r|-b] [-i] [-q] [-n <suffix>] [-v]" >&2 # [cite: 183]
-            echo -e "  -c: Configuration file (can be encrypted .conf.gpg or regular .conf)" # [cite: 183]
-            echo -e "  -f: Override compression format (zip, tar.gz, tar)" # [cite: 183]
-            echo -e "  -d: Dry run (no actual changes)" # [cite: 183]
-            echo -e "  -l: Store backup locally only" # [cite: 184]
-            echo -e "  -r: Store backup remotely only" # [cite: 184]
-            echo -e "  -b: Store backup both locally and remotely" # [cite: 184]
-            echo -e "  -i: Use incremental backup" # [cite: 184]
-            echo -e "  -q: Quiet mode (minimal output, suppresses interactive prompts)" # Added
-            echo -e "  -n: Custom suffix for backup filename (e.g., 'files-pre-deploy')" # Added
-            echo -e "  -v: Verbose output" # [cite: 184]
+        c) CONFIG_FILE="$OPTARG";;
+        f) OVERRIDE_FORMAT="$OPTARG";; # Override compression format
+        d) DRY_RUN=true;;
+        l) BACKUP_LOCATION="local";;
+        r) BACKUP_LOCATION="remote";;
+        b) BACKUP_LOCATION="both";;
+        i) INCREMENTAL=true;;
+        q) QUIET=true;;
+        n) NAME_SUFFIX="$OPTARG";;
+        v) VERBOSE=true;;
+        \?) # Handle invalid options
+            echo -e "${RED}${BOLD}Usage:${NC} $0 -c <config_file> [-f <format>] [-d] [-l|-r|-b] [-i] [-q] [-n <suffix>] [-v]" >&2
+            echo -e "  -c: Configuration file (can be .conf.gpg or .conf)" >&2
+            echo -e "  -f: Override compression format (e.g., zip, tar.gz, tar)" >&2
+            echo -e "  -d: Dry run (simulate changes, no actual backup)" >&2
+            echo -e "  -l: Store backup locally only" >&2
+            echo -e "  -r: Store backup remotely only" >&2
+            echo -e "  -b: Store backup both locally and remotely" >&2
+            echo -e "  -i: Use incremental backup for files" >&2
+            echo -e "  -q: Quiet mode (minimal output, suppresses interactive prompts)" >&2
+            echo -e "  -n: Custom suffix for backup filename (e.g., 'files-pre-deploy')" >&2
+            echo -e "  -v: Verbose output" >&2
             exit 1
             ;;
     esac
 done
 
-# --- Interactive prompt for NAME_SUFFIX ---
+# --- Interactive prompt for NAME_SUFFIX if not provided via -n and not in QUIET mode ---
 if [ -z "$NAME_SUFFIX" ] && [ "${QUIET}" = false ]; then
     echo -e "${YELLOW}Do you want to add a custom suffix to the files backup filename? (y/N):${NC}"
     read -r -p "> " confirm_suffix
     if [[ "$confirm_suffix" =~ ^[Yy]$ ]]; then
-        echo -e "${YELLOW}Enter custom suffix:${NC}"
+        echo -e "${YELLOW}Enter custom suffix (e.g., 'before-major-update'):${NC}"
         read -r -p "> " interactive_suffix
         if [ -n "$interactive_suffix" ]; then
-            NAME_SUFFIX=$(sanitize_filename_suffix "$interactive_suffix")
+            NAME_SUFFIX=$(sanitize_filename_suffix "$interactive_suffix") # Sanitize using common.sh function
             if [ -n "$NAME_SUFFIX" ]; then
                  echo -e "${GREEN}Using sanitized suffix: '${NAME_SUFFIX}'${NC}"
             else
-                 echo -e "${YELLOW}No valid suffix provided or suffix became empty after sanitization. Proceeding without a custom suffix.${NC}"
+                 echo -e "${YELLOW}No valid suffix derived after sanitization. Proceeding without a custom suffix.${NC}"
             fi
         else
             echo -e "${YELLOW}No suffix entered. Proceeding without a custom suffix.${NC}"
         fi
     else
-        echo -e "${INFO}Proceeding without a custom suffix.${NC}"
+        if ! $QUIET; then # Only print if not quiet
+             echo -e "${INFO}Proceeding without a custom suffix.${NC}" # INFO color from common.sh
+        fi
     fi
 elif [ -n "$NAME_SUFFIX" ]; then
+    # Sanitize suffix if provided via -n argument
     ORIGINAL_CMD_SUFFIX="$NAME_SUFFIX"
     NAME_SUFFIX=$(sanitize_filename_suffix "$NAME_SUFFIX")
     if [ -z "$NAME_SUFFIX" ] && [ -n "$ORIGINAL_CMD_SUFFIX" ]; then
-         echo -e "${YELLOW}Warning: Provided suffix '${ORIGINAL_CMD_SUFFIX}' was invalid or became empty. Proceeding without a custom suffix.${NC}"
-    elif [ "$NAME_SUFFIX" != "$ORIGINAL_CMD_SUFFIX" ]; then
+         if ! $QUIET; then echo -e "${YELLOW}Warning: Provided suffix '${ORIGINAL_CMD_SUFFIX}' was invalid or became empty after sanitization. Proceeding without a custom suffix.${NC}"; fi
+         log "WARNING" "Provided suffix '${ORIGINAL_CMD_SUFFIX}' sanitized to empty. No suffix will be used."
+    elif [ "$NAME_SUFFIX" != "$ORIGINAL_CMD_SUFFIX" ] && [ -n "$NAME_SUFFIX" ] && ! $QUIET; then
         echo -e "${YELLOW}Sanitized command-line suffix: '${ORIGINAL_CMD_SUFFIX}' -> '${NAME_SUFFIX}'${NC}"
     fi
 fi
 
-init_log "WordPress Files Backup" # [cite: 186]
+init_log "WordPress Files Backup" # Initialize logging for this script
 
-# Config file processing
-if [ -z "$CONFIG_FILE" ]; then # [cite: 186]
-    echo -e "${YELLOW}${BOLD}No configuration file specified.${NC}" # [cite: 186]
-    if ! select_config_file "$SCRIPTPATH/configs" "files"; then # [cite: 187]
-        echo -e "${RED}${BOLD}Error: Configuration file selection failed!${NC}" >&2 # [cite: 187]
+# --- Configuration file processing ---
+if [ -z "$CONFIG_FILE" ]; then
+    if ! $QUIET; then echo -e "${YELLOW}${BOLD}No configuration file specified.${NC}"; fi
+    if ! select_config_file "$SCRIPTPATH/configs" "files backup"; then # Interactive selection
+        log "ERROR" "Configuration file selection failed or was cancelled."
         exit 1
     fi
-elif [ ! -f "$CONFIG_FILE" ]; then # [cite: 187]
-    echo -e "${RED}${BOLD}Error: Configuration file $CONFIG_FILE not found!${NC}" >&2 # [cite: 188]
+elif [ ! -f "$CONFIG_FILE" ]; then # Ensure specified config file exists
+    log "ERROR" "Configuration file '$CONFIG_FILE' not found."
     exit 1
-fi # [cite: 188]
-process_config_file "$CONFIG_FILE" "Files Backup" # Self-correction: specific process type
+fi
+process_config_file "$CONFIG_FILE" "Files Backup" # Load and source the config
 
-# Validate required configuration variables
-for var in wpPath; do # [cite: 191]
-    if [ -z "${!var}" ]; then # [cite: 192]
-        echo -e "${RED}${BOLD}Error: Required variable $var is not set in $CONFIG_FILE!${NC}" >&2 # [cite: 192]
+# Validate required configuration variables from config file
+for var in wpPath; do # wpPath is essential for knowing what to back up
+    if [ -z "${!var}" ]; then
+        log "ERROR" "Required variable '$var' is not set in configuration file '$CONFIG_FILE'."
         exit 1
     fi
 done
 
-# Check SSH settings if remote backup is enabled
-if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then # [cite: 192]
-    for var in destinationPort destinationUser destinationIP destinationFilesBackupPath privateKeyPath; do # [cite: 193]
-        if [ -z "${!var}" ]; then # [cite: 194]
-            echo -e "${RED}${BOLD}Error: Required SSH variable $var for remote backup is not set in $CONFIG_FILE!${NC}" >&2 # [cite: 195]
+# Determine final backup location: CLI > Config file's BACKUP_LOCATION > default 'remote'
+# BACKUP_LOCATION from config is already sourced. CLI_BACKUP_LOCATION holds the -l, -r, -b option.
+# Let's rename the CLI option variable to avoid confusion with the config's BACKUP_LOCATION.
+FINAL_BACKUP_LOCATION="${BACKUP_LOCATION_CLI:-${BACKUP_LOCATION:-remote}}" # BACKUP_LOCATION_CLI from getopts, BACKUP_LOCATION from config
+# This was slightly off. `getopts` directly sets `BACKUP_LOCATION`. So, if -l, -r, or -b is used, `BACKUP_LOCATION` is set.
+# If not, it remains empty, then `BACKUP_LOCATION` from config is used. If that's also empty, it defaults to 'remote'.
+# Corrected logic:
+if [ -z "$BACKUP_LOCATION" ]; then # If -l, -r, -b were NOT used
+    BACKUP_LOCATION="${BACKUP_LOCATION_CONFIG:-remote}" # Use config's or default to remote. (Assume BACKUP_LOCATION_CONFIG is the var name in .conf)
+                                                       # For now, assuming the sourced config var is also named BACKUP_LOCATION
+fi
+
+
+# Check SSH settings if remote backup location is involved
+if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then
+    for var in destinationPort destinationUser destinationIP destinationFilesBackupPath privateKeyPath; do
+        if [ -z "${!var}" ]; then # These vars must be set in the config file
+            log "ERROR" "Required SSH variable '$var' for remote backup is not set in '$CONFIG_FILE'."
             exit 1
         fi
     done
 fi
 
-# Define backup directories and names
-DIR="${DIR:-$(date +%Y%m%d-%H%M%S)}" # [cite: 195]
-BACKUP_DIR="${BACKUP_DIR:-$SCRIPTPATH/backups}" # [cite: 195]
-LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-$SCRIPTPATH/local_backups}" # [cite: 195]
-DEST="$BACKUP_DIR/$DIR" # [cite: 195]
-FILES_FILE_PREFIX="${FILES_FILE_PREFIX:-Files}" # [cite: 195]
-COMPRESSION_FORMAT="${OVERRIDE_FORMAT:-${COMPRESSION_FORMAT:-zip}}" # [cite: 195]
-NICE_LEVEL="${NICE_LEVEL:-19}" # [cite: 195]
-EXCLUDE_PATTERNS="${EXCLUDE_PATTERNS:-wp-staging,*.log,cache,wpo-cache}" # [cite: 195]
-LOG_LEVEL="${VERBOSE:+verbose}" # [cite: 195]
-LOG_LEVEL="${LOG_LEVEL:-normal}" # [cite: 195]
-LAST_BACKUP_FILE="$SCRIPTPATH/last_files_backup.txt" # [cite: 195] # Note: this was SCRIPTPATH/last_files_backup.txt in original files.sh
+# --- Define backup directories and final filenames ---
+# DIR is typically set by common.sh (current timestamp), or can be overridden by config
+BACKUP_DIR_STAGING="${BACKUP_DIR_STAGING:-$SCRIPTPATH/backups}" # Main staging area for temp files
+LOCAL_BACKUP_DIR_FINAL="${LOCAL_BACKUP_DIR_FINAL:-$SCRIPTPATH/local_backups}" # Final local storage path
 
-FORMATTED_SUFFIX=""
+DEST_TEMP="$BACKUP_DIR_STAGING/$DIR" # Temporary directory for this specific backup instance
+
+FILES_FILE_PREFIX="${FILES_FILE_PREFIX:-Files}" # From config or default
+COMPRESSION_FORMAT="${OVERRIDE_FORMAT:-${COMPRESSION_FORMAT_FILES:-tar.gz}}" # CLI > Config (COMPRESSION_FORMAT_FILES) > Default (tar.gz)
+NICE_LEVEL="${NICE_LEVEL:-19}"
+EXCLUDE_PATTERNS="${EXCLUDE_PATTERNS:-wp-staging,*.log,cache,wpo-cache,backup*,*backups,node_modules}" # Added more common excludes
+LOG_LEVEL="${VERBOSE:+verbose}"
+LOG_LEVEL="${LOG_LEVEL:-normal}"
+LAST_BACKUP_FILE_PATH="$SCRIPTPATH/logs/last_files_backup_path.txt" # Stores path of the last successful files backup's staging dir
+
+FORMATTED_SUFFIX="" # Prepare suffix part for the filename
 if [ -n "$NAME_SUFFIX" ]; then
     FORMATTED_SUFFIX="-${NAME_SUFFIX}"
 fi
-FILES_FILENAME="${FILES_FILE_PREFIX}-${DIR}${FORMATTED_SUFFIX}.${COMPRESSION_FORMAT}" # [cite: 195]
+FILES_FILENAME="${FILES_FILE_PREFIX}-${DIR}${FORMATTED_SUFFIX}.${COMPRESSION_FORMAT}"
 
+# Prepare EXCLUDE_ARGS for rsync from comma-separated string
+EXCLUDE_ARGS=""
+if [ -n "$EXCLUDE_PATTERNS" ]; then
+    IFS=',' read -ra PATTERNS_ARRAY <<< "$EXCLUDE_PATTERNS"
+    for pattern_item in "${PATTERNS_ARRAY[@]}"; do
+        pattern_item_trimmed=$(echo "$pattern_item" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//') # Trim whitespace
+        if [ -n "$pattern_item_trimmed" ]; then
+             EXCLUDE_ARGS="$EXCLUDE_ARGS --exclude='$pattern_item_trimmed'"
+        fi
+    done
+fi
 
-EXCLUDE_ARGS="" #
-IFS=',' read -ra PATTERNS <<< "$EXCLUDE_PATTERNS" # [cite: 195]
-for pattern in "${PATTERNS[@]}"; do # [cite: 195]
-    EXCLUDE_ARGS="$EXCLUDE_ARGS --exclude='$pattern'" # [cite: 196]
-done
-
-# SSH Validation (uses common.sh function)
-# validate_ssh function is in common.sh
-
+# --- Cleanup Function Trap ---
 cleanup_files() {
-    cleanup "Files backup process" "Files backup" #
-    rm -rf "$DEST" #
+    log "INFO" "Files backup process ended. Cleaning up temporary directory: $DEST_TEMP ..."
+    if [ -d "$DEST_TEMP" ]; then
+        rm -rf "$DEST_TEMP"
+        log "INFO" "Temporary directory $DEST_TEMP removed."
+    fi
 }
-trap cleanup_files INT TERM #
+trap cleanup_files EXIT INT TERM
 
 # --- Main Backup Logic ---
 if ! $QUIET; then
-    echo -e "${CYAN}Starting files backup...${NC}"
-    echo -e "${INFO}Backup location: ${BOLD}$BACKUP_LOCATION${NC}"
+    echo -e "${CYAN}Starting files backup for '${wpHost:-$(basename "$wpPath")}'...${NC}"
+    echo -e "${INFO}Backup Target Location: ${BOLD}$BACKUP_LOCATION${NC}"
     if [ "$INCREMENTAL" = true ]; then
-        echo -e "${INFO}Incremental backup: ${BOLD}Enabled${NC}"
+        echo -e "${INFO}Incremental Backup: ${BOLD}Enabled${NC}"
     fi
     if [ -n "$FORMATTED_SUFFIX" ]; then
-        echo -e "${INFO}Filename suffix: ${BOLD}${NAME_SUFFIX}${NC}"
+        echo -e "${INFO}Filename Suffix: ${BOLD}${NAME_SUFFIX}${NC}"
     fi
+    echo -e "${INFO}Final Filename (approx): ${BOLD}${FILES_FILENAME}${NC}"
 fi
 
-log "INFO" "Starting files backup for $DIR to $BACKUP_LOCATION (Incremental: $INCREMENTAL, Suffix: $NAME_SUFFIX)" #
-update_status "STARTED" "Files backup process for $DIR to $BACKUP_LOCATION" #
+log "INFO" "Starting files backup (Instance: $DIR, Target: $BACKUP_LOCATION, Incremental: $INCREMENTAL, Suffix: '$NAME_SUFFIX')"
+update_status "STARTED" "Files backup process for ${wpHost:-$DIR} to $BACKUP_LOCATION"
 
-if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then # [cite: 198]
-    validate_ssh "$destinationUser" "$destinationIP" "$destinationPort" "$privateKeyPath" "Files backup" # [cite: 197, 198]
-    log "INFO" "SSH connection successfully validated" # [cite: 199]
+# Validate SSH connection if remote backup is involved
+if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then
+    validate_ssh "$destinationUser" "$destinationIP" "$destinationPort" "$privateKeyPath" "Files Backup SSH Check"
+    log "INFO" "SSH connection to $destinationUser@$destinationIP:$destinationPort validated."
 fi
 
-# Create directories
-if [ "$DRY_RUN" = false ]; then # [cite: 199]
-    mkdir -pv "$BACKUP_DIR" # [cite: 200]
-    check_status $? "Create backup directory" "Files backup" # [cite: 200, 201]
-    mkdir -pv "$DEST" # [cite: 201]
-    check_status $? "Create destination directory" "Files backup" # [cite: 201, 202]
-    if [ "$BACKUP_LOCATION" = "local" ] || [ "$BACKUP_LOCATION" = "both" ]; then # [cite: 202]
-        mkdir -pv "$LOCAL_BACKUP_DIR" # [cite: 203]
-        check_status $? "Create local backups directory" "Files backup" # [cite: 203, 204]
+# Create necessary directories if not in dry run mode
+if [ "$DRY_RUN" = false ]; then
+    log "INFO" "Creating directories: Staging='$BACKUP_DIR_STAGING', InstanceTemp='$DEST_TEMP'."
+    mkdir -pv "$BACKUP_DIR_STAGING"
+    check_status $? "Create main backup staging directory '$BACKUP_DIR_STAGING'" "Files Backup"
+    mkdir -pv "$DEST_TEMP"
+    check_status $? "Create instance temporary directory '$DEST_TEMP'" "Files Backup"
+    
+    if [ "$BACKUP_LOCATION" = "local" ] || [ "$BACKUP_LOCATION" = "both" ]; then
+        mkdir -pv "$LOCAL_BACKUP_DIR_FINAL"
+        check_status $? "Create final local backup directory '$LOCAL_BACKUP_DIR_FINAL'" "Files Backup"
     fi
 else
-    log "INFO" "Dry-run mode enabled: skipping directory creation" # [cite: 204]
+    log "INFO" "[Dry Run] Skipping directory creation."
 fi
 
-# Perform backup
-FILES_SIZE_VALUE="N/A"
-if [ "$DRY_RUN" = false ]; then # [cite: 204]
-    mkdir -pv "$DEST/Files" # [cite: 205]
-    check_status $? "Create Files directory" "Files backup" # [cite: 205, 206]
+# --- Perform Files Backup ---
+FILES_SIZE_HR="N/A (Dry Run)"
+if [ "$DRY_RUN" = false ]; then
+    FILES_DUMP_DIR="$DEST_TEMP/Files_Content" # Subdirectory for rsync content
+    mkdir -pv "$FILES_DUMP_DIR"
+    check_status $? "Create content dump subdirectory '$FILES_DUMP_DIR'" "Files Backup"
 
-    RSYNC_OPTS="-avrh --progress --max-size=\"${maxSize:-50m}\"" # [cite: 206]
+    RSYNC_BASE_OPTS="-a --delete --info=progress2" # Archive, delete extraneous, show progress
+    # Add --max-size if defined in config or common.sh, e.g. "${rsyncMaxSizeOpt}"
+    # RSYNC_OPTS="$RSYNC_BASE_OPTS ${rsyncMaxSizeOpt}"
+    RSYNC_OPTS="$RSYNC_BASE_OPTS --max-size=${maxFileSizeRsync:-100m}" # Example: max file size 100m
 
-    if [ "$INCREMENTAL" = true ] && [ -f "$LAST_BACKUP_FILE" ] && [ -d "$(cat "$LAST_BACKUP_FILE" 2>/dev/null)/Files" ]; then # Modified to check $LAST_BACKUP_FILE/Files [cite: 206]
-        LAST_BACKUP_BASE_DIR=$(cat "$LAST_BACKUP_FILE") # [cite: 207]
-        log "INFO" "Using incremental backup from $LAST_BACKUP_BASE_DIR/Files" # [cite: 207]
-        if ! $QUIET; then echo -e "${CYAN}${BOLD}Performing incremental files backup...${NC}"; fi # [cite: 207]
-        RSYNC_OPTS="$RSYNC_OPTS --link-dest=$LAST_BACKUP_BASE_DIR/Files" # [cite: 207]
-    else
-        if [ "$INCREMENTAL" = true ]; then # Log if incremental was intended but fallback
-            log "WARNING" "Last backup path or its 'Files' subdirectory not found. Performing full files backup instead."
+    # Handle incremental backup logic
+    if [ "$INCREMENTAL" = true ]; then
+        if [ -f "$LAST_BACKUP_FILE_PATH" ] && [ -s "$LAST_BACKUP_FILE_PATH" ]; then
+            PREVIOUS_BACKUP_STAGING_DIR=$(cat "$LAST_BACKUP_FILE_PATH")
+            # For --link-dest, the path should be to the *source* structure of the previous backup.
+            # If $PREVIOUS_BACKUP_STAGING_DIR stored $DEST_TEMP of previous run, then it had Files_Content/
+            if [ -d "$PREVIOUS_BACKUP_STAGING_DIR/Files_Content" ]; then
+                log "INFO" "Performing incremental files backup using reference: $PREVIOUS_BACKUP_STAGING_DIR/Files_Content"
+                if ! $QUIET; then echo -e "${CYAN}${BOLD}Performing incremental files backup...${NC}"; fi
+                RSYNC_OPTS="$RSYNC_OPTS --link-dest=\"$PREVIOUS_BACKUP_STAGING_DIR/Files_Content\""
+            else
+                log "WARNING" "Previous backup's content directory '$PREVIOUS_BACKUP_STAGING_DIR/Files_Content' not found. Performing full files backup instead."
+                INCREMENTAL="false" # Fallback to full
+            fi
+        else
+            log "WARNING" "Last backup reference file '$LAST_BACKUP_FILE_PATH' not found or empty. Performing full files backup."
+            INCREMENTAL="false" # Fallback to full
         fi
-        log "INFO" "Performing full files backup" # [cite: 207]
-        if ! $QUIET; then echo -e "${CYAN}${BOLD}Performing full files backup...${NC}"; fi # [cite: 207]
+    fi
+    
+    if [ "$INCREMENTAL" = "false" ]; then # Log if doing full (either by choice or fallback)
+        log "INFO" "Performing full files backup."
+        if ! $QUIET; then echo -e "${CYAN}${BOLD}Performing full files backup...${NC}"; fi
     fi
 
-    eval nice -n "$NICE_LEVEL" rsync $RSYNC_OPTS $EXCLUDE_ARGS "$wpPath/" "$DEST/Files/" # [cite: 207]
-    check_status $? "Rsync files" "Files backup" # [cite: 208]
+    # Using eval with rsync due to EXCLUDE_ARGS and RSYNC_OPTS potentially containing quoted arguments
+    RSYNC_CMD="nice -n \"$NICE_LEVEL\" rsync $RSYNC_OPTS $EXCLUDE_ARGS \"$wpPath/\" \"$FILES_DUMP_DIR/\""
+    log "DEBUG" "Executing rsync command: $RSYNC_CMD"
+    eval "$RSYNC_CMD"
+    check_status $? "Rsync WordPress files (Type: $([ "$INCREMENTAL" = true ] && echo "Incremental" || echo "Full"))" "Files Backup"
 
-    # Save current backup base path for next incremental
-    echo "$DEST" > "$LAST_BACKUP_FILE" # [cite: 208]
+    # If backup was successful (full or incremental), save current staging path for next incremental
+    echo "$DEST_TEMP" > "$LAST_BACKUP_FILE_PATH"
+    log "INFO" "Current backup staging path '$DEST_TEMP' saved to '$LAST_BACKUP_FILE_PATH' for future incremental reference."
 
-    cd "$DEST" || exit 1 # [cite: 208]
-    log "DEBUG" "Starting files compression" # [cite: 209]
-    if ! $QUIET; then echo -e "${CYAN}${BOLD}Compressing files...${NC}"; fi # [cite: 209]
-    compress "Files/" "$FILES_FILENAME" # [cite: 209]
-    check_status $? "Compress files" "Files backup" # [cite: 209, 210]
+    if ! $QUIET; then echo -e "${CYAN}${BOLD}Compressing backed up files...${NC}"; fi
+    compress "$FILES_DUMP_DIR" "$DEST_TEMP/$FILES_FILENAME" # compress function from common.sh
+    check_status $? "Compress files dump '$FILES_DUMP_DIR' to '$DEST_TEMP/$FILES_FILENAME'" "Files Backup"
 
-    if ! $QUIET; then echo -e "${CYAN}${BOLD}Cleaning up temporary Files directory...${NC}"; fi # [cite: 210]
-    nice -n "$NICE_LEVEL" rm -rfv Files/ # [cite: 210]
-    check_status $? "Clean up Files directory" "Files backup" # [cite: 210, 211]
+    if ! $QUIET; then echo -e "${CYAN}${BOLD}Cleaning up raw files dump directory...${NC}"; fi
+    rm -rf "$FILES_DUMP_DIR" # Remove the uncompressed files directory
+    check_status $? "Clean up raw files dump directory '$FILES_DUMP_DIR'" "Files Backup"
 
-    FILES_SIZE_VALUE=$(du -h "$DEST/$FILES_FILENAME" | cut -f1) # [cite: 211]
-    log "INFO" "Files backup created: $DEST/$FILES_FILENAME (Size: $FILES_SIZE_VALUE)" # [cite: 211]
+    if [ -f "$DEST_TEMP/$FILES_FILENAME" ]; then
+        FILES_SIZE_BYTES=$(du -b "$DEST_TEMP/$FILES_FILENAME" | cut -f1)
+        FILES_SIZE_HR=$(human_readable_size "$FILES_SIZE_BYTES")
+        log "INFO" "Files backup created and compressed: $DEST_TEMP/$FILES_FILENAME (Size: $FILES_SIZE_HR)"
+    else
+        log "ERROR" "Compressed files backup '$DEST_TEMP/$FILES_FILENAME' not found. Aborting."
+        FILES_SIZE_HR="Error"
+        exit 1
+    fi
 
+    # --- Handle Backup Location ---
     case $BACKUP_LOCATION in
-        local) #
-            log "INFO" "Saving backup locally to $LOCAL_BACKUP_DIR" #
-            if ! $QUIET; then echo -e "${CYAN}${BOLD}Moving files backup to local storage...${NC}"; fi #
-            mv -v "$DEST/$FILES_FILENAME" "$LOCAL_BACKUP_DIR/" #
-            check_status $? "Move files backup to local backup directory" "Files backup" # [cite: 212]
-            rm -rf "$DEST"
+        local)
+            log "INFO" "Moving backup to final local storage: $LOCAL_BACKUP_DIR_FINAL/$FILES_FILENAME"
+            if ! $QUIET; then echo -e "${CYAN}${BOLD}Moving files backup to local storage: $LOCAL_BACKUP_DIR_FINAL ...${NC}"; fi
+            mv -v "$DEST_TEMP/$FILES_FILENAME" "$LOCAL_BACKUP_DIR_FINAL/"
+            check_status $? "Move files backup to final local directory" "Files Backup"
             ;;
-        remote) # [cite: 213]
-            log "INFO" "Uploading backup to remote server" # [cite: 213]
-            if ! $QUIET; then echo -e "${CYAN}${BOLD}Uploading files backup to remote server...${NC}"; fi # [cite: 213]
-            nice -n "$NICE_LEVEL" rsync -azvrh --progress --compress-level=9 "$DEST/$FILES_FILENAME" \
-                -e "ssh -p ${destinationPort:-22} -i ${privateKeyPath}" \
-                "$destinationUser@$destinationIP:$destinationFilesBackupPath" # [cite: 213]
-            check_status $? "Upload files backup to remote server" "Files backup" # [cite: 214]
-            rm -rf "$DEST"
+        remote)
+            log "INFO" "Uploading backup to remote server: $destinationUser@$destinationIP:$destinationFilesBackupPath"
+            if ! $QUIET; then echo -e "${CYAN}${BOLD}Uploading files backup to remote server...${NC}"; fi
+            nice -n "$NICE_LEVEL" rsync -az --info=progress2 --remove-source-files \
+                -e "ssh -p ${destinationPort:-22} -i \"${privateKeyPath}\"" \
+                "$DEST_TEMP/$FILES_FILENAME" \
+                "$destinationUser@$destinationIP:$destinationFilesBackupPath/"
+            check_status $? "Upload files backup to remote server and remove source" "Files Backup"
             ;;
-        both) # [cite: 215]
-            log "INFO" "Saving backup locally and uploading to remote server" # [cite: 215]
-            if ! $QUIET; then echo -e "${CYAN}${BOLD}Copying files backup to local storage...${NC}"; fi # [cite: 215]
-            cp -v "$DEST/$FILES_FILENAME" "$LOCAL_BACKUP_DIR/" # [cite: 215]
-            check_status $? "Copy files backup to local" "Files backup" # [cite: 215, 216]
+        both)
+            log "INFO" "Copying backup to local storage and uploading to remote server."
+            if ! $QUIET; then echo -e "${CYAN}${BOLD}Copying files backup to local storage: $LOCAL_BACKUP_DIR_FINAL ...${NC}"; fi
+            cp -v "$DEST_TEMP/$FILES_FILENAME" "$LOCAL_BACKUP_DIR_FINAL/"
+            check_status $? "Copy files backup to final local directory" "Files Backup"
 
-            if ! $QUIET; then echo -e "${CYAN}${BOLD}Uploading files backup to remote server...${NC}"; fi # [cite: 216]
-            nice -n "$NICE_LEVEL" rsync -azvrh --progress --compress-level=9 "$DEST/$FILES_FILENAME" \
-                -e "ssh -p ${destinationPort:-22} -i ${privateKeyPath}" \
-                "$destinationUser@$destinationIP:$destinationFilesBackupPath" # [cite: 216]
-            check_status $? "Upload files backup to remote server" "Files backup" # [cite: 217]
-            rm -rf "$DEST"
+            if ! $QUIET; then echo -e "${CYAN}${BOLD}Uploading files backup to remote server...${NC}"; fi
+            nice -n "$NICE_LEVEL" rsync -az --info=progress2 \
+                -e "ssh -p ${destinationPort:-22} -i \"${privateKeyPath}\"" \
+                "$DEST_TEMP/$FILES_FILENAME" \
+                "$destinationUser@$destinationIP:$destinationFilesBackupPath/"
+            check_status $? "Upload files backup to remote server" "Files Backup"
             ;;
     esac
 else
-    log "INFO" "Dry-run mode enabled: skipping files backup execution" # [cite: 218]
+    log "INFO" "[Dry Run] Skipping actual files backup, compression, and transfer."
+    if ! $QUIET; then echo -e "${YELLOW}[Dry Run] Would rsync, compress, and store files backup named (approx) '${FILES_FILENAME}'.${NC}"; fi
 fi
 
 # --- Finalization ---
-END_TIME=$(date +%s) #
-DURATION=$((END_TIME - START_TIME)) #
-FORMATTED_DURATION=$(format_duration $DURATION) #
-log "INFO" "Files backup process for $DIR successfully completed to $BACKUP_LOCATION in ${FORMATTED_DURATION}" #
-update_status "SUCCESS" "Files backup process for $DIR to $BACKUP_LOCATION completed in ${FORMATTED_DURATION}" #
-notify "SUCCESS" "Files backup process for $DIR successfully completed to $BACKUP_LOCATION in ${FORMATTED_DURATION}" "Files backup" #
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME))
+FORMATTED_DURATION=$(format_duration "$DURATION")
+
+log "INFO" "Files backup process for ${wpHost:-$DIR} completed. Target: $BACKUP_LOCATION. Duration: ${FORMATTED_DURATION}."
+update_status "SUCCESS" "Files backup for ${wpHost:-$DIR} to $BACKUP_LOCATION completed in ${FORMATTED_DURATION}."
+
+if [ "${NOTIFY_ON_SUCCESS:-true}" = true ] && [ "$DRY_RUN" = false ]; then
+    notify "SUCCESS" "Files backup for ${wpHost:-$(basename "$wpPath")} (Suffix: '$NAME_SUFFIX', Instance: $DIR, Incremental: $INCREMENTAL) completed to $BACKUP_LOCATION in ${FORMATTED_DURATION}. File: $FILES_FILENAME, Size: $FILES_SIZE_HR." "Files Backup"
+fi
 
 if ! $QUIET; then
-    echo -e "${GREEN}${BOLD}Files backup completed successfully!${NC}" #
-    echo -e "${GREEN}Backup location: ${NC}${BOLD}${BACKUP_LOCATION}${NC}" #
-    if [ "$INCREMENTAL" = true ] && [ "$DRY_RUN" = false ]; then
-         echo -e "${GREEN}Backup type: ${NC}${BOLD}Incremental${NC}"
-    elif [ "$DRY_RUN" = false ]; then
-         echo -e "${GREEN}Backup type: ${NC}${BOLD}Full${NC}"
+    echo -e "\n${GREEN}${BOLD}Files backup process completed successfully!${NC}"
+    echo -e "${GREEN}Target Location(s): ${NC}${BOLD}${BACKUP_LOCATION}${NC}"
+    if [ "$DRY_RUN" = false ]; then
+        echo -e "${GREEN}Backup Type:        ${NC}${BOLD}$([ "$INCREMENTAL" = true ] && echo "Incremental" || echo "Full")${NC}"
     fi
     if [ -n "$FORMATTED_SUFFIX" ]; then
-        echo -e "${GREEN}Custom suffix: ${NC}${BOLD}${NAME_SUFFIX}${NC}"
+        echo -e "${GREEN}Custom Suffix Used: ${NC}${BOLD}${NAME_SUFFIX}${NC}"
     fi
-    echo -e "${GREEN}Time taken: ${NC}${BOLD}${FORMATTED_DURATION}${NC}" #
-    FINAL_FILES_PATH_INFO=""
+    echo -e "${GREEN}Time Taken:         ${NC}${BOLD}${FORMATTED_DURATION}${NC}"
+    
+    FINAL_FILES_PATH_DISPLAY="N/A"
     if [ "$DRY_RUN" = false ]; then
         case "$BACKUP_LOCATION" in
-            "local") FINAL_FILES_PATH_INFO="$LOCAL_BACKUP_DIR/$FILES_FILENAME";;
-            "remote") FINAL_FILES_PATH_INFO="$destinationUser@$destinationIP:$destinationFilesBackupPath/$FILES_FILENAME";;
-            "both") FINAL_FILES_PATH_INFO="$LOCAL_BACKUP_DIR/$FILES_FILENAME and remote";;
+            "local") FINAL_FILES_PATH_DISPLAY="$LOCAL_BACKUP_DIR_FINAL/$FILES_FILENAME";;
+            "remote") FINAL_FILES_PATH_DISPLAY="$destinationUser@$destinationIP:$destinationFilesBackupPath/$FILES_FILENAME";;
+            "both") FINAL_FILES_PATH_DISPLAY="$LOCAL_BACKUP_DIR_FINAL/$FILES_FILENAME (and remote at $destinationUser@$destinationIP:$destinationFilesBackupPath/$FILES_FILENAME)";;
         esac
-        echo -e "${GREEN}Files backup: ${NC}$FINAL_FILES_PATH_INFO (${FILES_SIZE_VALUE})"
+        echo -e "${GREEN}Backup File:        ${NC}${FINAL_FILES_PATH_DISPLAY} (${FILES_SIZE_HR})"
     else
-        echo -e "${GREEN}Filename (dry run): ${NC}${FILES_FILENAME}"
+        echo -e "${YELLOW}Dry Run - Filename would be (approx): ${NC}${FILES_FILENAME}"
     fi
 fi
+
+# The EXIT trap (cleanup_files) will handle removal of $DEST_TEMP
+exit 0

@@ -1,50 +1,60 @@
 #!/bin/bash
-# File: backup.sh
+#
+# Script: backup.sh
+# Author: Sayyed Jamal Ghasemi
+# Email: jamal13647850@gmail.com
+# LinkedIn: https://www.linkedin.com/in/jamal1364/
+# Instagram: https://www.instagram.com/jamal13647850
+# Telegram: https://t.me/jamaldev
+# Website: https://jamalghasemi.com
+# Date: 2025-05-24
+#
+# Description: Performs WordPress backup (database and/or files) with various options.
 
 # Source common functions and variables
-. "$(dirname "$0")/common.sh" # [cite: 14]
+. "$(dirname "$0")/common.sh"
 
 # --- Script specific variables ---
-LOG_FILE="$SCRIPTPATH/logs/backup.log" # [cite: 14]
-STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/backup_status.log}" # [cite: 14]
-LAST_BACKUP_FILE="$SCRIPTPATH/logs/last_backup.txt" # [cite: 14]
+LOG_FILE="$SCRIPTPATH/logs/backup.log"
+STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/backup_status.log}"
+LAST_BACKUP_FILE="$SCRIPTPATH/logs/last_backup.txt" # Stores path of the last successful files backup for incremental
 
 # --- Default values for options ---
-DRY_RUN=false # [cite: 14]
-CLI_BACKUP_LOCATION=""  # This will store the command-line specified backup location [cite: 14]
-VERBOSE=false # [cite: 14]
-QUIET=false # Initialize QUIET, will be set by -q
-INCREMENTAL=false # [cite: 14]
-BACKUP_TYPE="full" # [cite: 14]
-NAME_SUFFIX="" # For custom filename suffix
+DRY_RUN=false
+CLI_BACKUP_LOCATION=""  # Stores command-line specified backup location (local, remote, both)
+VERBOSE=false
+QUIET=false             # Suppress non-essential output and interactive prompts
+INCREMENTAL=false       # Perform incremental file backup
+BACKUP_TYPE="full"      # Type of backup (full, db, files)
+NAME_SUFFIX=""          # Custom suffix for backup filenames
 
 # Parse command line options
 while getopts "c:f:dlrbit:qn:v" opt; do # Added 'n:' for name_suffix and 'q' for quiet
     case $opt in
-        c) CONFIG_FILE="$OPTARG";; # [cite: 15]
-        f) OVERRIDE_FORMAT="$OPTARG";; # [cite: 15]
-        d) DRY_RUN=true;; # [cite: 15]
-        l) CLI_BACKUP_LOCATION="local";; # [cite: 16]
-        r) CLI_BACKUP_LOCATION="remote";; # [cite: 16]
-        b) CLI_BACKUP_LOCATION="both";; # [cite: 16]
-        i) INCREMENTAL=true;; # [cite: 16]
-        t) BACKUP_TYPE="$OPTARG";; # [cite: 16]
-        q) QUIET=true;; # [cite: 16]
+        c) CONFIG_FILE="$OPTARG";;
+        f) OVERRIDE_FORMAT="$OPTARG";; # Override compression format
+        d) DRY_RUN=true;;
+        l) CLI_BACKUP_LOCATION="local";;  # Backup locally only
+        r) CLI_BACKUP_LOCATION="remote";; # Backup remotely only
+        b) CLI_BACKUP_LOCATION="both";;   # Backup locally and remotely
+        i) INCREMENTAL=true;;
+        t) BACKUP_TYPE="$OPTARG";;
+        q) QUIET=true;;
         n) NAME_SUFFIX="$OPTARG";;
-        v) VERBOSE=true;; # [cite: 16]
-        \?) # [cite: 17]
-            echo -e "${RED}${BOLD}Usage:${NC} $0 -c <config_file> [-f <format>] [-d] [-l|-r|-b] [-i] [-t <type>] [-q] [-n <suffix>] [-v]" >&2 # [cite: 17]
-            echo -e "  -c: Configuration file (can be encrypted .conf.gpg or regular .conf)" # [cite: 17]
-            echo -e "  -f: Override compression format (zip, tar.gz, tar)" # [cite: 17]
-            echo -e "  -d: Dry run (no actual changes)" # [cite: 17]
-            echo -e "  -l: Store backup locally only" # [cite: 18]
-            echo -e "  -r: Store backup remotely only" # [cite: 18]
-            echo -e "  -b: Store backup both locally and remotely" # [cite: 18]
-            echo -e "  -i: Use incremental backup for files" # [cite: 18]
-            echo -e "  -t: Backup type (full, db, files)" # [cite: 18]
-            echo -e "  -q: Quiet mode (minimal output, suppresses interactive prompts)" # [cite: 19]
-            echo -e "  -n: Custom suffix for backup filenames (e.g., 'projectX-final')"
-            echo -e "  -v: Verbose output" # [cite: 19]
+        v) VERBOSE=true;;
+        \?)
+            echo -e "${RED}${BOLD}Usage:${NC} $0 -c <config_file> [-f <format>] [-d] [-l|-r|-b] [-i] [-t <type>] [-q] [-n <suffix>] [-v]" >&2
+            echo -e "  -c: Configuration file (can be encrypted .conf.gpg or regular .conf)" >&2
+            echo -e "  -f: Override compression format (zip, tar.gz, tar)" >&2
+            echo -e "  -d: Dry run (no actual changes)" >&2
+            echo -e "  -l: Store backup locally only" >&2
+            echo -e "  -r: Store backup remotely only" >&2
+            echo -e "  -b: Store backup both locally and remotely" >&2
+            echo -e "  -i: Use incremental backup for files" >&2
+            echo -e "  -t: Backup type (full, db, files)" >&2
+            echo -e "  -q: Quiet mode (minimal output, suppresses interactive prompts)" >&2
+            echo -e "  -n: Custom suffix for backup filenames (e.g., 'projectX-final')" >&2
+            echo -e "  -v: Verbose output" >&2
             exit 1
             ;;
     esac
@@ -58,7 +68,7 @@ if [ -z "$NAME_SUFFIX" ] && [ "${QUIET}" = false ]; then
         echo -e "${YELLOW}Enter custom suffix (e.g., 'before-major-update', 'staging-backup'):${NC}"
         read -r -p "> " interactive_suffix
         if [ -n "$interactive_suffix" ]; then
-            NAME_SUFFIX=$(sanitize_filename_suffix "$interactive_suffix")
+            NAME_SUFFIX=$(sanitize_filename_suffix "$interactive_suffix") # Sanitize the input
             if [ -n "$NAME_SUFFIX" ]; then
                  echo -e "${GREEN}Using sanitized suffix: '${NAME_SUFFIX}'${NC}"
             else
@@ -68,87 +78,91 @@ if [ -z "$NAME_SUFFIX" ] && [ "${QUIET}" = false ]; then
             echo -e "${YELLOW}No suffix entered. Proceeding without a custom suffix.${NC}"
         fi
     else
-        echo -e "${INFO}Proceeding without a custom suffix.${NC}"
+        echo -e "${INFO}Proceeding without a custom suffix.${NC}" # Using ${INFO} for consistency if defined in common.sh
     fi
 elif [ -n "$NAME_SUFFIX" ]; then
-    # Sanitize suffix if provided via -n
+    # Sanitize suffix if provided via -n command-line argument
     ORIGINAL_CMD_SUFFIX="$NAME_SUFFIX"
     NAME_SUFFIX=$(sanitize_filename_suffix "$NAME_SUFFIX")
-    if [ -z "$NAME_SUFFIX" ] && [ -n "$ORIGINAL_CMD_SUFFIX" ]; then # If suffix became empty
+    if [ -z "$NAME_SUFFIX" ] && [ -n "$ORIGINAL_CMD_SUFFIX" ]; then # If suffix became empty after sanitization
          echo -e "${YELLOW}Warning: Provided suffix '${ORIGINAL_CMD_SUFFIX}' was invalid or became empty after sanitization. Proceeding without a custom suffix.${NC}"
-    elif [ "$NAME_SUFFIX" != "$ORIGINAL_CMD_SUFFIX" ]; then
+    elif [ "$NAME_SUFFIX" != "$ORIGINAL_CMD_SUFFIX" ] && [ "${QUIET}" = false ] ; then # Notify only if changed and not quiet
         echo -e "${YELLOW}Sanitized command-line suffix: '${ORIGINAL_CMD_SUFFIX}' -> '${NAME_SUFFIX}'${NC}"
     fi
 fi
 
 # Initialize log (after QUIET is potentially set and suffix handled)
-init_log "WordPress Backup" # [cite: 20]
+init_log "WordPress Backup"
 
 # --- Configuration file processing ---
-if [ -z "$CONFIG_FILE" ]; then # [cite: 20]
-    echo -e "${YELLOW}${BOLD}No configuration file specified.${NC}" # [cite: 20]
-    if ! select_config_file "$SCRIPTPATH/configs" "backup"; then # [cite: 21]
-        echo -e "${RED}${BOLD}Error: Configuration file selection failed!${NC}" >&2 # [cite: 21]
+if [ -z "$CONFIG_FILE" ]; then
+    if ! $QUIET; then echo -e "${YELLOW}${BOLD}No configuration file specified.${NC}"; fi
+    if ! select_config_file "$SCRIPTPATH/configs" "backup"; then
+        echo -e "${RED}${BOLD}Error: Configuration file selection failed!${NC}" >&2
         exit 1
     fi
 fi
-process_config_file "$CONFIG_FILE" "Backup" # [cite: 21]
+process_config_file "$CONFIG_FILE" "Backup" # This sources the config file
 
-# Validate required configuration variables
-for var in wpPath; do # [cite: 21]
-    if [ -z "${!var}" ]; then # [cite: 22]
-        echo -e "${RED}${BOLD}Error: Required variable $var is not set in $CONFIG_FILE!${NC}" >&2 # [cite: 22]
+# Validate required configuration variables from the config file
+for var in wpPath; do # Add other essential vars here if needed
+    if [ -z "${!var}" ]; then
+        echo -e "${RED}${BOLD}Error: Required variable '$var' is not set in $CONFIG_FILE!${NC}" >&2
         exit 1
     fi
 done
 
 # --- Define backup directories and final filenames ---
-DIR="${DIR:-$(date +%Y%m%d-%H%M%S)}" # [cite: 22]
-BACKUP_DIR="${BACKUP_DIR:-$SCRIPTPATH/backups}" # [cite: 22]
-LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-$SCRIPTPATH/local_backups}" # [cite: 22]
+DIR="${DIR:-$(date +%Y%m%d-%H%M%S)}" # Backup directory name, defaults to current timestamp
+BACKUP_DIR="${BACKUP_DIR:-$SCRIPTPATH/backups}" # Main temporary backup staging area
+LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-$SCRIPTPATH/local_backups}" # Final local storage for backups
 
-BACKUP_LOCATION="${CLI_BACKUP_LOCATION:-${BACKUP_LOCATION:-remote}}" # [cite: 22]
+# Determine backup location: CLI option > config file > default (remote)
+BACKUP_LOCATION="${CLI_BACKUP_LOCATION:-${BACKUP_LOCATION:-remote}}"
 
-DEST="$BACKUP_DIR/$DIR" # [cite: 22]
-DB_FILE_PREFIX="${DB_FILE_PREFIX:-DB}" # [cite: 22]
-FILES_FILE_PREFIX="${FILES_FILE_PREFIX:-Files}" # [cite: 22]
-COMPRESSION_FORMAT="${OVERRIDE_FORMAT:-${COMPRESSION_FORMAT:-zip}}" # [cite: 22]
-NICE_LEVEL="${NICE_LEVEL:-19}" #
-EXCLUDE_PATTERNS="${EXCLUDE_PATTERNS:-wp-staging,*.log,cache,wpo-cache}" # [cite: 22]
-LOG_LEVEL="${VERBOSE:+verbose}" # [cite: 22]
-LOG_LEVEL="${LOG_LEVEL:-${LOG_LEVEL:-normal}}" # [cite: 22]
+DEST="$BACKUP_DIR/$DIR" # Full path to the current backup's staging directory
+DB_FILE_PREFIX="${DB_FILE_PREFIX:-DB}"
+FILES_FILE_PREFIX="${FILES_FILE_PREFIX:-Files}"
+COMPRESSION_FORMAT="${OVERRIDE_FORMAT:-${COMPRESSION_FORMAT:-zip}}" # CLI format > config format > default (zip)
+NICE_LEVEL="${NICE_LEVEL:-19}" # CPU niceness for intensive operations
+EXCLUDE_PATTERNS="${EXCLUDE_PATTERNS:-wp-staging,*.log,cache,wpo-cache}" # Default rsync exclude patterns
+LOG_LEVEL="${VERBOSE:+verbose}" # Set log level based on verbosity
+LOG_LEVEL="${LOG_LEVEL:-${LOG_LEVEL:-normal}}"
 
-FORMATTED_SUFFIX=""
+FORMATTED_SUFFIX="" # Prepare the suffix part for filenames
 if [ -n "$NAME_SUFFIX" ]; then
     FORMATTED_SUFFIX="-${NAME_SUFFIX}"
 fi
 
-DB_FILENAME="${DB_FILE_PREFIX}-${DIR}${FORMATTED_SUFFIX}.${COMPRESSION_FORMAT}" # [cite: 22]
-FILES_FILENAME="${FILES_FILE_PREFIX}-${DIR}${FORMATTED_SUFFIX}.${COMPRESSION_FORMAT}" # [cite: 22]
+DB_FILENAME="${DB_FILE_PREFIX}-${DIR}${FORMATTED_SUFFIX}.${COMPRESSION_FORMAT}"
+FILES_FILENAME="${FILES_FILE_PREFIX}-${DIR}${FORMATTED_SUFFIX}.${COMPRESSION_FORMAT}"
 
-# SSH Variables Check for remote backup
-if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then # [cite: 22]
-    for var in destinationPort destinationUser destinationIP destinationDbBackupPath destinationFilesBackupPath privateKeyPath; do # [cite: 23]
-        if [ -z "${!var}" ]; then # [cite: 24]
-            echo -e "${RED}${BOLD}Error: Required SSH variable $var is not set in $CONFIG_FILE for remote backup!${NC}" >&2 # [cite: 25]
+# SSH Variables Check for remote backup location
+if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then
+    for var in destinationPort destinationUser destinationIP destinationDbBackupPath destinationFilesBackupPath privateKeyPath; do
+        if [ -z "${!var}" ]; then
+            echo -e "${RED}${BOLD}Error: Required SSH variable '$var' is not set in $CONFIG_FILE for remote backup!${NC}" >&2
             exit 1
         fi
     done
 fi
 
-# Prepare EXCLUDE_ARGS for rsync
-EXCLUDE_ARGS="" #
-IFS=',' read -ra PATTERNS <<< "$EXCLUDE_PATTERNS" # [cite: 25]
-for pattern in "${PATTERNS[@]}"; do # [cite: 25]
-    EXCLUDE_ARGS="$EXCLUDE_ARGS --exclude '$pattern'" # [cite: 26]
+# Prepare EXCLUDE_ARGS for rsync from comma-separated string
+EXCLUDE_ARGS=""
+IFS=',' read -ra PATTERNS <<< "$EXCLUDE_PATTERNS"
+for pattern in "${PATTERNS[@]}"; do
+    EXCLUDE_ARGS="$EXCLUDE_ARGS --exclude='$pattern'" # Single quotes to handle patterns with spaces, etc.
 done
 
-# Cleanup function trap
+# Cleanup function trap: ensures temporary files/directories are removed on exit/interrupt
 cleanup_backup() {
-    cleanup "Backup process" "Backup" #
-    rm -rf "$DEST" #
+    cleanup "Backup process" "Backup" # Call common cleanup
+    if [ -d "$DEST" ]; then # Only remove $DEST if it was created
+      log "INFO" "Cleaning up temporary backup directory: $DEST"
+      rm -rf "$DEST"
+    fi
 }
-trap cleanup_backup INT TERM #
+trap cleanup_backup EXIT INT TERM # Added EXIT trap for more robust cleanup
 
 # --- Main Backup Logic ---
 if ! $QUIET; then
@@ -163,213 +177,275 @@ if ! $QUIET; then
     fi
 fi
 
-log "INFO" "Starting backup process for $DIR to $BACKUP_LOCATION (Incremental Files: $INCREMENTAL, Type: $BACKUP_TYPE, Suffix: $NAME_SUFFIX)" #
-update_status "STARTED" "Backup process for $DIR to $BACKUP_LOCATION" #
+log "INFO" "Starting backup (Type: $BACKUP_TYPE, Location: $BACKUP_LOCATION, Suffix: '$NAME_SUFFIX', Incremental: $INCREMENTAL) for $DIR"
+update_status "STARTED" "Backup process for $DIR to $BACKUP_LOCATION"
 
-# Validate SSH if needed
-if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then # [cite: 26]
-    validate_ssh "$destinationUser" "$destinationIP" "$destinationPort" "$privateKeyPath" "Backup" # [cite: 27]
-    log "INFO" "SSH connection validated successfully" # [cite: 27]
+# Validate SSH connection if remote backup is involved
+if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then
+    validate_ssh "$destinationUser" "$destinationIP" "$destinationPort" "$privateKeyPath" "Backup"
+    # validate_ssh should exit on failure, so no need to check $? here if it's designed that way.
+    log "INFO" "SSH connection validated successfully"
 fi
 
-# Create directories
-if [ "$DRY_RUN" = false ]; then # [cite: 27]
-    mkdir -pv "$BACKUP_DIR" # [cite: 28]
-    check_status $? "Creating backups directory" "Backup" # [cite: 28, 29]
-    mkdir -pv "$DEST" # [cite: 29]
-    check_status $? "Creating destination directory" "Backup" # [cite: 29, 30]
-    if [ "$BACKUP_LOCATION" = "local" ] || [ "$BACKUP_LOCATION" = "both" ]; then # [cite: 30]
-        mkdir -pv "$LOCAL_BACKUP_DIR" # [cite: 31]
-        check_status $? "Creating local backups directory" "Backup" # [cite: 31, 32]
+# Create necessary directories
+if [ "$DRY_RUN" = false ]; then
+    mkdir -pv "$BACKUP_DIR" # Main staging parent
+    check_status $? "Creating main backup directory $BACKUP_DIR" "Backup"
+    mkdir -pv "$DEST" # Specific staging for this backup instance
+    check_status $? "Creating destination staging directory $DEST" "Backup"
+    if [ "$BACKUP_LOCATION" = "local" ] || [ "$BACKUP_LOCATION" = "both" ]; then
+        mkdir -pv "$LOCAL_BACKUP_DIR" # Final local storage
+        check_status $? "Creating local backups directory $LOCAL_BACKUP_DIR" "Backup"
     fi
 else
-    log "INFO" "Dry run: Skipping directory creation" #
+    log "INFO" "Dry run: Skipping directory creation."
 fi
 
-# Incremental backup setup
-LAST_BACKUP="" #
-if [ "$INCREMENTAL" = true ] && [ -f "$LAST_BACKUP_FILE" ]; then # [cite: 32]
-    LAST_BACKUP=$(cat "$LAST_BACKUP_FILE") # [cite: 33]
-    log "INFO" "Using last backup as reference for incremental files: $LAST_BACKUP" # [cite: 33]
-elif [ "$INCREMENTAL" = true ]; then # [cite: 33]
-    log "WARNING" "No previous backup found, falling back to full files backup" # [cite: 34]
-    INCREMENTAL=false # [cite: 34]
-fi
+# Incremental backup setup: determine path to the last backup for rsync --link-dest
+LAST_BACKUP_FILES_PATH=""
+if [ "$INCREMENTAL" = true ] && { [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "files" ]; }; then
+    if [ -f "$LAST_BACKUP_FILE" ] && [ -s "$LAST_BACKUP_FILE" ]; then # Check if file exists and is not empty
+        # Assuming LAST_BACKUP_FILE stores the path to the root of the previous backup's Files directory (e.g., .../backups/YYYYMMDD-HHMMSS/Files)
+        # Or it could store the root of the backup instance (e.g., .../backups/YYYYMMDD-HHMMSS)
+        # For rsync --link-dest, we need the path to the *source* of the previous files, typically $PREVIOUS_DEST/Files
+        PREVIOUS_BACKUP_INSTANCE_ROOT=$(cat "$LAST_BACKUP_FILE")
+        LAST_BACKUP_FILES_PATH="$PREVIOUS_BACKUP_INSTANCE_ROOT/Files" # Assuming structure $ROOT/Files
 
-# Database Backup
-if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "db" ]; then # [cite: 34]
-    if [ "$DRY_RUN" = false ]; then # [cite: 35]
-        mkdir -pv "$DEST/DB" # [cite: 36]
-        check_status $? "Creating DB directory" "Backup" # [cite: 36, 37]
-        cd "$DEST/DB" || exit 1 # [cite: 37]
-        if ! $QUIET; then echo -e "${CYAN}${BOLD}Exporting database...${NC}"; fi # [cite: 38]
-        wp_cli db export --add-drop-table --path="$wpPath" # [cite: 38]
-        check_status $? "Full database export" "Backup" # [cite: 38, 39]
-        cd "$DEST" || exit 1 # [cite: 39]
-        log "DEBUG" "Starting database compression" # [cite: 40]
-        if ! $QUIET; then echo -e "${CYAN}${BOLD}Compressing database...${NC}"; fi # [cite: 40]
-        (compress "DB/" "$DB_FILENAME" && nice -n "$NICE_LEVEL" rm -rfv DB/) & # [cite: 40]
-        DB_PID=$! # [cite: 40]
-    else
-        log "INFO" "Dry run: Skipping database backup" # [cite: 41]
-    fi
-fi
-
-# Files Backup
-if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "files" ]; then # [cite: 41]
-    if [ "$DRY_RUN" = false ]; then # [cite: 42]
-        mkdir -pv "$DEST/Files" # [cite: 43]
-        check_status $? "Creating Files directory" "Backup" # [cite: 43, 44]
-        if ! $QUIET; then echo -e "${CYAN}${BOLD}Backing up files...${NC}"; fi # [cite: 44]
-        if [ "$INCREMENTAL" = true ] && [ -n "$LAST_BACKUP" ]; then # [cite: 44]
-            # Ensure LAST_BACKUP directory exists before using it with --link-dest
-            if [ -d "$LAST_BACKUP/Files" ]; then
-                eval "nice -n \"$NICE_LEVEL\" rsync -av --progress --max-size=\"${maxSize:-50m}\" $EXCLUDE_ARGS --link-dest=\"$LAST_BACKUP/Files\" \"$wpPath/\" \"$DEST/Files\"" # [cite: 45]
-                check_status $? "Incremental files backup with rsync" "Backup" # [cite: 45, 46]
-            else
-                log "WARNING" "Last backup files directory '$LAST_BACKUP/Files' not found. Performing full files backup instead."
-                eval "nice -n \"$NICE_LEVEL\" rsync -av --progress --max-size=\"${maxSize:-50m}\" $EXCLUDE_ARGS \"$wpPath/\" \"$DEST/Files\"" # [cite: 46]
-                check_status $? "Full files backup with rsync (fallback from incremental)" "Backup" # [cite: 46, 47]
-            fi
+        if [ -d "$LAST_BACKUP_FILES_PATH" ]; then
+            log "INFO" "Using last backup files at '$LAST_BACKUP_FILES_PATH' as reference for incremental."
         else
-            eval "nice -n \"$NICE_LEVEL\" rsync -av --progress --max-size=\"${maxSize:-50m}\" $EXCLUDE_ARGS \"$wpPath/\" \"$DEST/Files\"" # [cite: 46]
-            check_status $? "Full files backup with rsync" "Backup" # [cite: 46, 47]
+            log "WARNING" "Last backup files path '$LAST_BACKUP_FILES_PATH' not found. Falling back to full files backup."
+            INCREMENTAL=false # Disable incremental if previous path is invalid
+            LAST_BACKUP_FILES_PATH=""
         fi
-        cd "$DEST" || exit 1 # [cite: 47]
-        log "DEBUG" "Starting files compression" # [cite: 48]
-        if ! $QUIET; then echo -e "${CYAN}${BOLD}Compressing files...${NC}"; fi # [cite: 48]
-        (compress "Files/" "$FILES_FILENAME" && nice -n "$NICE_LEVEL" rm -rfv Files/) & # [cite: 48]
-        FILES_PID=$! # [cite: 48]
     else
-        log "INFO" "Dry run: Skipping files backup" # [cite: 49]
+        log "WARNING" "No previous backup reference found ($LAST_BACKUP_FILE is missing or empty). Falling back to full files backup."
+        INCREMENTAL=false # Disable incremental if no reference
     fi
 fi
 
-# Wait for compression and cleanup
-if [ "$DRY_RUN" = false ]; then # [cite: 49]
-    if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "db" ]; then # [cite: 50]
-        wait $DB_PID # [cite: 51]
-        check_status $? "Database compression and cleanup" "Backup" # [cite: 51, 52]
-        log "INFO" "Database backup completed: $DEST/$DB_FILENAME" # [cite: 52]
+
+# --- Database Backup ---
+DB_PID=""
+if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "db" ]; then
+    if [ "$DRY_RUN" = false ]; then
+        mkdir -pv "$DEST/DB"
+        check_status $? "Creating DB staging directory $DEST/DB" "Backup"
+        
+        if ! $QUIET; then echo -e "${CYAN}${BOLD}Exporting database...${NC}"; fi
+        # It's safer to export to a file directly in $DEST/DB
+        wp_cli db export "$DEST/DB/database.sql" --add-drop-table --path="$wpPath"
+        check_status $? "Database export to $DEST/DB/database.sql" "Backup"
+        
+        if [ -f "$DEST/DB/database.sql" ]; then
+            log "DEBUG" "Starting database compression for $DB_FILENAME"
+            if ! $QUIET; then echo -e "${CYAN}${BOLD}Compressing database...${NC}"; fi
+            # Compress the contents of DB/ into $DEST/$DB_FILENAME, then remove DB/
+            (cd "$DEST" && compress "DB/" "$DB_FILENAME" && nice -n "$NICE_LEVEL" rm -rfv DB/) &
+            DB_PID=$!
+        else
+            log "ERROR" "Database SQL export file not found at $DEST/DB/database.sql. Skipping DB compression."
+            update_status "FAILURE" "Database SQL export failed" # Or a more specific status
+        fi
+    else
+        log "INFO" "Dry run: Skipping database backup."
+        if ! $QUIET; then echo -e "${INFO}${BOLD}[Dry Run] Would export and compress database.${NC}"; fi
+    fi
+fi
+
+# --- Files Backup ---
+FILES_PID=""
+if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "files" ]; then
+    if [ "$DRY_RUN" = false ]; then
+        mkdir -pv "$DEST/Files"
+        check_status $? "Creating Files staging directory $DEST/Files" "Backup"
+        if ! $QUIET; then echo -e "${CYAN}${BOLD}Backing up files...${NC}"; fi
+
+        RSYNC_CMD="nice -n \"$NICE_LEVEL\" rsync -av --progress --delete --max-size=\"${maxSize:-50m}\" $EXCLUDE_ARGS"
+        if [ "$INCREMENTAL" = true ] && [ -n "$LAST_BACKUP_FILES_PATH" ] && [ -d "$LAST_BACKUP_FILES_PATH" ]; then
+            # For incremental, source is wpPath, dest is $DEST/Files, link-dest is previous Files dir
+            log "INFO" "Performing incremental files backup using --link-dest='$LAST_BACKUP_FILES_PATH'"
+            RSYNC_CMD="$RSYNC_CMD --link-dest=\"$LAST_BACKUP_FILES_PATH\" \"$wpPath/\" \"$DEST/Files/\""
+        else
+            if [ "$INCREMENTAL" = true ]; then # Log if it was intended but couldn't run
+                 log "INFO" "Performing full files backup (incremental conditions not met)."
+            else
+                 log "INFO" "Performing full files backup."
+            fi
+            RSYNC_CMD="$RSYNC_CMD \"$wpPath/\" \"$DEST/Files/\""
+        fi
+        
+        eval "$RSYNC_CMD" # Using eval because EXCLUDE_ARGS contains quoted arguments
+        check_status $? "Files backup with rsync ($([ "$INCREMENTAL" = true ] && echo "incremental" || echo "full"))" "Backup"
+        
+        log "DEBUG" "Starting files compression for $FILES_FILENAME"
+        if ! $QUIET; then echo -e "${CYAN}${BOLD}Compressing files...${NC}"; fi
+        # Compress the contents of Files/ into $DEST/$FILES_FILENAME, then remove Files/
+        (cd "$DEST" && compress "Files/" "$FILES_FILENAME" && nice -n "$NICE_LEVEL" rm -rfv Files/) &
+        FILES_PID=$!
+    else
+        log "INFO" "Dry run: Skipping files backup."
+        if ! $QUIET; then echo -e "${INFO}${BOLD}[Dry Run] Would rsync and compress files.${NC}"; fi
+    fi
+fi
+
+# Wait for compression and cleanup of source folders
+if [ "$DRY_RUN" = false ]; then
+    if [ -n "$DB_PID" ] && { [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "db" ]; }; then
+        wait $DB_PID
+        check_status $? "Database compression and source cleanup" "Backup"
+        if [ -f "$DEST/$DB_FILENAME" ]; then
+            log "INFO" "Database backup compressed: $DEST/$DB_FILENAME"
+        else
+            log "ERROR" "Database backup file $DEST/$DB_FILENAME not found after compression."
+        fi
     fi
 
-    if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "files" ]; then # [cite: 52]
-        wait $FILES_PID # [cite: 53]
-        check_status $? "Files compression and cleanup" "Backup" # [cite: 53, 54]
-        log "INFO" "Files backup completed: $DEST/$FILES_FILENAME" # [cite: 54]
+    if [ -n "$FILES_PID" ] && { [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "files" ]; }; then
+        wait $FILES_PID
+        check_status $? "Files compression and source cleanup" "Backup"
+         if [ -f "$DEST/$FILES_FILENAME" ]; then
+            log "INFO" "Files backup compressed: $DEST/$FILES_FILENAME"
+        else
+            log "ERROR" "Files backup file $DEST/$FILES_FILENAME not found after compression."
+        fi
     fi
 fi
 
 # Copy to local storage if specified
-if [ "$DRY_RUN" = false ] && { [ "$BACKUP_LOCATION" = "local" ] || [ "$BACKUP_LOCATION" = "both" ]; }; then # [cite: 54]
-    if ! $QUIET; then echo -e "${CYAN}${BOLD}Copying backups to local storage...${NC}"; fi # [cite: 55]
-
-    if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "db" ]; then # [cite: 55]
-        cp -v "$DEST/$DB_FILENAME" "$LOCAL_BACKUP_DIR/" # [cite: 56]
-        check_status $? "Copying database backup to local storage" "Backup" # [cite: 56, 57]
+if [ "$DRY_RUN" = false ] && { [ "$BACKUP_LOCATION" = "local" ] || [ "$BACKUP_LOCATION" = "both" ]; }; then
+    if ! $QUIET; then echo -e "${CYAN}${BOLD}Copying backups to local storage: $LOCAL_BACKUP_DIR ${NC}"; fi
+    COPIED_TO_LOCAL=false
+    if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "db" ]; then
+        if [ -f "$DEST/$DB_FILENAME" ]; then
+            cp -v "$DEST/$DB_FILENAME" "$LOCAL_BACKUP_DIR/"
+            check_status $? "Copying database backup to $LOCAL_BACKUP_DIR" "Backup" && COPIED_TO_LOCAL=true
+        else
+            log "ERROR" "DB backup file $DEST/$DB_FILENAME not found for local copy."
+        fi
     fi
 
-    if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "files" ]; then # [cite: 57]
-        cp -v "$DEST/$FILES_FILENAME" "$LOCAL_BACKUP_DIR/" # [cite: 58]
-        check_status $? "Copying files backup to local storage" "Backup" # [cite: 58, 59]
+    if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "files" ]; then
+         if [ -f "$DEST/$FILES_FILENAME" ]; then
+            cp -v "$DEST/$FILES_FILENAME" "$LOCAL_BACKUP_DIR/"
+            check_status $? "Copying files backup to $LOCAL_BACKUP_DIR" "Backup" && COPIED_TO_LOCAL=true
+        else
+            log "ERROR" "Files backup file $DEST/$FILES_FILENAME not found for local copy."
+        fi
     fi
-    log "INFO" "Backups copied to local storage: $LOCAL_BACKUP_DIR" # [cite: 59]
+    [ "$COPIED_TO_LOCAL" = true ] && log "INFO" "Backups copied to local storage: $LOCAL_BACKUP_DIR"
 fi
 
 # Transfer to remote storage if specified
-if [ "$DRY_RUN" = false ] && { [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; }; then # [cite: 59]
-    if ! $QUIET; then echo -e "${CYAN}${BOLD}Transferring backups to remote storage...${NC}"; fi # [cite: 60]
-
-    if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "db" ]; then # [cite: 60]
-        nice -n "$NICE_LEVEL" scp -P "$destinationPort" -i "$privateKeyPath" "$DEST/$DB_FILENAME" "$destinationUser@$destinationIP:$destinationDbBackupPath" # [cite: 61]
-        check_status $? "Transferring database backup to remote storage" "Backup" # [cite: 61, 62]
+if [ "$DRY_RUN" = false ] && { [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; }; then
+    if ! $QUIET; then echo -e "${CYAN}${BOLD}Transferring backups to remote storage...${NC}"; fi
+    TRANSFERRED_TO_REMOTE=false
+    if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "db" ]; then
+        if [ -f "$DEST/$DB_FILENAME" ]; then
+            nice -n "$NICE_LEVEL" scp -P "$destinationPort" -i "$privateKeyPath" "$DEST/$DB_FILENAME" "$destinationUser@$destinationIP:$destinationDbBackupPath"
+            check_status $? "Transferring database backup to remote" "Backup" && TRANSFERRED_TO_REMOTE=true
+        else
+            log "ERROR" "DB backup file $DEST/$DB_FILENAME not found for remote transfer."
+        fi
     fi
 
-    if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "files" ]; then # [cite: 62]
-        nice -n "$NICE_LEVEL" scp -P "$destinationPort" -i "$privateKeyPath" "$DEST/$FILES_FILENAME" "$destinationUser@$destinationIP:$destinationFilesBackupPath" # [cite: 63]
-        check_status $? "Transferring files backup to remote storage" "Backup" # [cite: 63, 64]
+    if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "files" ]; then
+        if [ -f "$DEST/$FILES_FILENAME" ]; then
+            nice -n "$NICE_LEVEL" scp -P "$destinationPort" -i "$privateKeyPath" "$DEST/$FILES_FILENAME" "$destinationUser@$destinationIP:$destinationFilesBackupPath"
+            check_status $? "Transferring files backup to remote" "Backup" && TRANSFERRED_TO_REMOTE=true
+        else
+            log "ERROR" "Files backup file $DEST/$FILES_FILENAME not found for remote transfer."
+        fi
     fi
-    log "INFO" "Backups transferred to remote storage" # [cite: 64]
+    [ "$TRANSFERRED_TO_REMOTE" = true ] && log "INFO" "Backups transferred to remote storage."
 fi
 
-# Save last backup path for incremental if files were backed up
-if [ "$DRY_RUN" = false ] && { [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "files" ]; }; then # [cite: 64]
-    echo "$DEST" > "$LAST_BACKUP_FILE" # [cite: 65]
-    log "INFO" "Saved current backup path for future incremental backups: $DEST" # [cite: 65]
+# Save last backup *instance root* path for incremental if files were backed up successfully.
+# This should be the $DEST path, which contains the /Files subdirectory used by rsync.
+if [ "$DRY_RUN" = false ] && { [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "files" ]; }; then
+    # Only update if files backup was successful (check if $DEST/$FILES_FILENAME exists)
+    if [ -f "$DEST/$FILES_FILENAME" ]; then
+        echo "$DEST" > "$LAST_BACKUP_FILE" # Save the root of the current backup instance
+        log "INFO" "Saved current backup instance path '$DEST' to $LAST_BACKUP_FILE for future incremental backups."
+    else
+        log "WARNING" "Files backup artifact $DEST/$FILES_FILENAME not found. Not updating $LAST_BACKUP_FILE."
+    fi
 fi
 
-# Cleanup temporary files if only remote backup
-if [ "$DRY_RUN" = false ]; then # [cite: 65]
-    if [ "$BACKUP_LOCATION" = "remote" ]; then # [cite: 66]
-        if ! $QUIET; then echo -e "${CYAN}${BOLD}Cleaning up local temporary files...${NC}"; fi # [cite: 67]
-        rm -rf "$DEST" # [cite: 67]
-        check_status $? "Cleaning up local temporary files" "Backup" # [cite: 67, 68]
+# Cleanup temporary files ($DEST) if backup was only remote and successfully transferred, or if it's not 'both'.
+# The main `trap cleanup_backup EXIT` will handle $DEST removal if script exits for any reason.
+# This specific cleanup is for when backup location is *only* remote.
+if [ "$DRY_RUN" = false ]; then
+    if [ "$BACKUP_LOCATION" = "remote" ]; then # Only remote, not local, not both
+        if ! $QUIET; then echo -e "${CYAN}${BOLD}Cleaning up local temporary staging files from $DEST...${NC}"; fi
+        rm -rf "$DEST" # This is now handled by the EXIT trap. Can be removed or kept for explicit logging.
+        # check_status $? "Cleaning up local temporary staging files from $DEST" "Backup" # Also handled by trap.
+        log "INFO" "Local temporary staging directory $DEST cleaned up for remote-only backup."
     fi
 fi
 
 # --- Finalization ---
-END_TIME=$(date +%s) #
-DURATION=$((END_TIME - START_TIME)) #
-FORMATTED_DURATION=$(format_duration $DURATION) #
-log "INFO" "Backup process completed successfully in ${FORMATTED_DURATION}" #
-update_status "SUCCESS" "Backup process for $DIR completed in ${FORMATTED_DURATION}" #
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME)) # START_TIME should be defined in common.sh
+FORMATTED_DURATION=$(format_duration $DURATION)
+log "INFO" "Backup process for $DIR completed successfully in ${FORMATTED_DURATION}"
+update_status "SUCCESS" "Backup process for $DIR (Type: $BACKUP_TYPE) completed in ${FORMATTED_DURATION}"
 
-notify "SUCCESS" "Backup process for $DIR completed successfully to $BACKUP_LOCATION in ${FORMATTED_DURATION}" "Backup" #
+# Send notification
+if [ "${NOTIFY_ON_SUCCESS:-true}" = true ]; then # Assuming NOTIFY_ON_SUCCESS is a var from common.sh or config
+    notify "SUCCESS" "Backup of $wpHost ($DIR, Type: $BACKUP_TYPE) completed to $BACKUP_LOCATION in ${FORMATTED_DURATION}" "Backup"
+fi
 
 if ! $QUIET; then
-    echo -e "${GREEN}${BOLD}Backup process completed successfully!${NC}" #
-    echo -e "${GREEN}Backup location: ${NC}${BOLD}${BACKUP_LOCATION}${NC}" #
-    echo -e "${GREEN}Backup type: ${NC}${BOLD}${BACKUP_TYPE}${NC}" #
+    echo -e "${GREEN}${BOLD}Backup process completed successfully!${NC}"
+    echo -e "${GREEN}Backup location(s): ${NC}${BOLD}${BACKUP_LOCATION}${NC}"
+    echo -e "${GREEN}Backup type: ${NC}${BOLD}${BACKUP_TYPE}${NC}"
     if [ -n "$FORMATTED_SUFFIX" ]; then
         echo -e "${GREEN}Custom suffix: ${NC}${BOLD}${NAME_SUFFIX}${NC}"
     fi
-    echo -e "${GREEN}Time taken: ${NC}${BOLD}${FORMATTED_DURATION}${NC}" #
+    echo -e "${GREEN}Time taken: ${NC}${BOLD}${FORMATTED_DURATION}${NC}"
 
-    FINAL_DB_PATH=""
-    FINAL_FILES_PATH=""
+    # Display final paths and sizes (if not dry run)
+    if [ "$DRY_RUN" = false ]; then
+        FINAL_DB_PATH_INFO=""
+        FINAL_FILES_PATH_INFO=""
 
-    case "$BACKUP_LOCATION" in
-        "local")
-            FINAL_DB_PATH="$LOCAL_BACKUP_DIR/$DB_FILENAME"
-            FINAL_FILES_PATH="$LOCAL_BACKUP_DIR/$FILES_FILENAME"
-            ;;
-        "both")
-            FINAL_DB_PATH="$LOCAL_BACKUP_DIR/$DB_FILENAME (and remote)"
-            FINAL_FILES_PATH="$LOCAL_BACKUP_DIR/$FILES_FILENAME (and remote)"
-            ;;
-        "remote")
-            # For remote-only, DEST was cleaned up, so refer to the intended remote path for info
-            # However, DB_FILENAME and FILES_FILENAME are correct names
-            FINAL_DB_PATH="$destinationUser@$destinationIP:$destinationDbBackupPath/$DB_FILENAME"
-            FINAL_FILES_PATH="$destinationUser@$destinationIP:$destinationFilesBackupPath/$FILES_FILENAME"
-            ;;
-    esac
-    
-    if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "db" ]; then # [cite: 68]
-        if [ "$BACKUP_LOCATION" = "local" ] || [ "$BACKUP_LOCATION" = "both" ]; then
-             if [ -f "$LOCAL_BACKUP_DIR/$DB_FILENAME" ]; then
-                DB_SIZE=$(du -h "$LOCAL_BACKUP_DIR/$DB_FILENAME" | cut -f1) #
-                echo -e "${GREEN}Database backup: ${NC}$LOCAL_BACKUP_DIR/$DB_FILENAME (${DB_SIZE})"
-             fi
-        elif [ "$BACKUP_LOCATION" = "remote" ] && [ -f "$DEST/$DB_FILENAME" ]; then # Should not happen if cleanup occurred
-             DB_SIZE=$(du -h "$DEST/$DB_FILENAME" | cut -f1) # [cite: 70]
-             echo -e "${GREEN}Database backup size (before remote cleanup): ${NC}${DB_SIZE}${NC}" # [cite: 70]
-        elif [ "$BACKUP_LOCATION" = "remote" ]; then
-             echo -e "${GREEN}Database backup: ${NC}$FINAL_DB_PATH"
+        if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "db" ]; then
+            DB_PATH_TO_CHECK=""
+            if [ "$BACKUP_LOCATION" = "local" ] || [ "$BACKUP_LOCATION" = "both" ]; then
+                DB_PATH_TO_CHECK="$LOCAL_BACKUP_DIR/$DB_FILENAME"
+            elif [ "$BACKUP_LOCATION" = "remote" ]; then
+                # For remote, we don't have local size after cleanup by trap. Info is enough.
+                FINAL_DB_PATH_INFO="$destinationUser@$destinationIP:$destinationDbBackupPath/$DB_FILENAME"
+            fi
+            if [ -n "$DB_PATH_TO_CHECK" ] && [ -f "$DB_PATH_TO_CHECK" ]; then
+                DB_SIZE=$(du -h "$DB_PATH_TO_CHECK" | cut -f1)
+                FINAL_DB_PATH_INFO="$DB_PATH_TO_CHECK (${DB_SIZE})"
+            elif [ -z "$FINAL_DB_PATH_INFO" ] ; then # If not remote and not found locally
+                 FINAL_DB_PATH_INFO="Not found or not created."
+            fi
+            echo -e "${GREEN}Database backup: ${NC}$FINAL_DB_PATH_INFO"
         fi
-    fi
 
-    if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "files" ]; then # [cite: 71]
-         if [ "$BACKUP_LOCATION" = "local" ] || [ "$BACKUP_LOCATION" = "both" ]; then
-             if [ -f "$LOCAL_BACKUP_DIR/$FILES_FILENAME" ]; then
-                FILES_SIZE=$(du -h "$LOCAL_BACKUP_DIR/$FILES_FILENAME" | cut -f1) #
-                echo -e "${GREEN}Files backup: ${NC}$LOCAL_BACKUP_DIR/$FILES_FILENAME (${FILES_SIZE})"
-             fi
-        elif [ "$BACKUP_LOCATION" = "remote" ] && [ -f "$DEST/$FILES_FILENAME" ]; then # Should not happen
-             FILES_SIZE=$(du -h "$DEST/$FILES_FILENAME" | cut -f1) # [cite: 72]
-             echo -e "${GREEN}Files backup size (before remote cleanup): ${NC}${FILES_SIZE}${NC}" # [cite: 72]
-        elif [ "$BACKUP_LOCATION" = "remote" ]; then
-             echo -e "${GREEN}Files backup: ${NC}$FINAL_FILES_PATH"
+        if [ "$BACKUP_TYPE" = "full" ] || [ "$BACKUP_TYPE" = "files" ]; then
+            FILES_PATH_TO_CHECK=""
+             if [ "$BACKUP_LOCATION" = "local" ] || [ "$BACKUP_LOCATION" = "both" ]; then
+                FILES_PATH_TO_CHECK="$LOCAL_BACKUP_DIR/$FILES_FILENAME"
+            elif [ "$BACKUP_LOCATION" = "remote" ]; then
+                FINAL_FILES_PATH_INFO="$destinationUser@$destinationIP:$destinationFilesBackupPath/$FILES_FILENAME"
+            fi
+
+            if [ -n "$FILES_PATH_TO_CHECK" ] && [ -f "$FILES_PATH_TO_CHECK" ]; then
+                FILES_SIZE=$(du -h "$FILES_PATH_TO_CHECK" | cut -f1)
+                FINAL_FILES_PATH_INFO="$FILES_PATH_TO_CHECK (${FILES_SIZE})"
+            elif [ -z "$FINAL_FILES_PATH_INFO" ] ; then
+                FINAL_FILES_PATH_INFO="Not found or not created."
+            fi
+            echo -e "${GREEN}Files backup: ${NC}$FINAL_FILES_PATH_INFO"
         fi
+    else
+        echo -e "${INFO}${BOLD}[Dry Run] No files were actually created or transferred.${NC}"
     fi
 fi
+# The EXIT trap will handle final cleanup of $DEST
+exit 0

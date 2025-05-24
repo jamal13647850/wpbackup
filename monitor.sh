@@ -1,673 +1,715 @@
 #!/bin/bash
-# monitor.sh - WordPress monitoring script
-# This script monitors WordPress installations and server health
+#
+# Script: monitor.sh
+# Author: Sayyed Jamal Ghasemi
+# Email: jamal13647850@gmail.com
+# LinkedIn: https://www.linkedin.com/in/jamal1364/
+# Instagram: https://www.instagram.com/jamal13647850
+# Telegram: https://t.me/jamaldev
+# Website: https://jamalghasemi.com
+# Date: 2025-05-24
+#
+# Description: Monitors WordPress installations and server health, checks against thresholds,
+#              generates reports, logs metrics, and sends alerts.
 
+# Source common functions and variables
 . "$(dirname "$0")/common.sh"
 
-# Set log files
+# --- Script specific log files ---
 LOG_FILE="$SCRIPTPATH/logs/monitor.log"
 STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/monitor_status.log}"
 
-# Default values
+# --- Default values for script options and behavior ---
 VERBOSE=false
-ALERT_ONLY=false
-QUIET=false
-REPORT_FILE="$SCRIPTPATH/logs/monitor_report.txt"
-METRICS_FILE="$SCRIPTPATH/logs/monitor_metrics.csv"
-THRESHOLD_FILE=""
-DRY_RUN=false
+ALERT_ONLY=false      # If true, only sends notifications/reports when issues (alerts) are found
+QUIET=false           # Minimal console output
+REPORT_FILE="$SCRIPTPATH/logs/monitor_report.txt" # Default path for the human-readable report
+METRICS_FILE="$SCRIPTPATH/logs/monitor_metrics.csv" # Default path for the CSV metrics log
+THRESHOLD_FILE=""     # Optional external file to define thresholds
+DRY_RUN=false         # If true, simulates monitoring without executing checks or writing files
 
-# Parse command line options
+# --- Parse command line options ---
 while getopts "c:t:r:m:aqvd" opt; do
     case $opt in
-        c) CONFIG_FILE="$OPTARG";;
-        t) THRESHOLD_FILE="$OPTARG";;
-        r) REPORT_FILE="$OPTARG";;
-        m) METRICS_FILE="$OPTARG";;
+        c) CONFIG_FILE="$OPTARG";;        # Main configuration file for WordPress site details
+        t) THRESHOLD_FILE="$OPTARG";;    # Threshold override file
+        r) REPORT_FILE="$OPTARG";;        # Custom report file path
+        m) METRICS_FILE="$OPTARG";;       # Custom metrics CSV file path
         a) ALERT_ONLY=true;;
         q) QUIET=true;;
         v) VERBOSE=true;;
         d) DRY_RUN=true;;
-        ?)
+        ?) # Handle invalid options
             echo -e "${RED}${BOLD}Usage:${NC} $0 -c <config_file> [-t <threshold_file>] [-r <report_file>] [-m <metrics_file>] [-a] [-q] [-v] [-d]" >&2
-            echo -e "  -c: Configuration file (can be encrypted .conf.gpg or regular .conf)"
-            echo -e "  -t: Threshold configuration file"
-            echo -e "  -r: Output report file (default: monitor_report.txt)"
-            echo -e "  -m: Metrics CSV file (default: monitor_metrics.csv)"
-            echo -e "  -a: Alert only mode (only report issues)"
-            echo -e "  -q: Quiet mode (minimal output)"
-            echo -e "  -v: Verbose output"
-            echo -e "  -d: Dry run (no actual monitoring)"
+            echo -e "  -c: Configuration file for site details (can be .conf.gpg or .conf)"
+            echo -e "  -t: Threshold configuration file (overrides defaults)"
+            echo -e "  -r: Output report file (default: $SCRIPTPATH/logs/monitor_report.txt)"
+            echo -e "  -m: Metrics CSV file (default: $SCRIPTPATH/logs/monitor_metrics.csv)"
+            echo -e "  -a: Alert only mode (only reports/notifies on issues exceeding thresholds)"
+            echo -e "  -q: Quiet mode (minimal console output)"
+            echo -e "  -v: Verbose output (sets LOG_LEVEL to verbose)"
+            echo -e "  -d: Dry run (simulates checks, no actual monitoring or file writing)"
             exit 1
             ;;
     esac
 done
 
-# Initialize log
+# Initialize log for this script
 init_log "WordPress Monitor"
 
-# Select or load config file
+# --- Configuration File Handling ---
 if [ -z "$CONFIG_FILE" ]; then
-    echo -e "${YELLOW}${BOLD}No configuration file specified.${NC}"
-    if ! select_config_file "$SCRIPTPATH/configs" "monitor"; then
-        echo -e "${RED}${BOLD}Error: Configuration file selection failed!${NC}" >&2
+    if ! $QUIET; then echo -e "${YELLOW}${BOLD}No configuration file specified for monitoring.${NC}"; fi
+    if ! select_config_file "$SCRIPTPATH/configs" "monitor"; then # Interactive selection
+        log "ERROR" "Configuration file selection failed or was cancelled."
         exit 1
     fi
 fi
+process_config_file "$CONFIG_FILE" "Monitor" # Load and source the main config
 
-# Process config file
-process_config_file "$CONFIG_FILE" "Monitor"
-
-# Load threshold configuration if specified
+# Load threshold configuration file if specified (this can override defaults set below)
 if [ -n "$THRESHOLD_FILE" ]; then
     if [ -f "$THRESHOLD_FILE" ]; then
+        # Source the threshold file, allowing it to set/override threshold variables
         . "$THRESHOLD_FILE"
-        log "INFO" "Loaded threshold configuration from $THRESHOLD_FILE"
+        log "INFO" "Successfully loaded threshold configuration from '$THRESHOLD_FILE'."
     else
-        echo -e "${RED}${BOLD}Error: Threshold file $THRESHOLD_FILE not found!${NC}" >&2
-        exit 1
+        log "ERROR" "Threshold file '$THRESHOLD_FILE' not found. Using default or main config thresholds."
+        if ! $QUIET; then echo -e "${RED}${BOLD}Error: Threshold file '$THRESHOLD_FILE' not found! Using defaults.${NC}" >&2; fi
+        # Not exiting, allowing script to run with default/main config thresholds
     fi
 fi
 
-# Set log level based on verbosity
+# Set operational variables (LOG_LEVEL from common.sh based on -v)
 LOG_LEVEL="${VERBOSE:+verbose}"
-LOG_LEVEL="${LOG_LEVEL:-normal}"
-NICE_LEVEL="${NICE_LEVEL:-19}"
+LOG_LEVEL="${LOG_LEVEL:-normal}" # Default log level
+NICE_LEVEL="${NICE_LEVEL:-19}"   # Default niceness for commands
 
-# Set default thresholds if not specified in config
-DISK_THRESHOLD="${DISK_THRESHOLD:-90}"
-CPU_THRESHOLD="${CPU_THRESHOLD:-80}"
-MEMORY_THRESHOLD="${MEMORY_THRESHOLD:-80}"
-LOAD_THRESHOLD="${LOAD_THRESHOLD:-2}"
-CONNECTIONS_THRESHOLD="${CONNECTIONS_THRESHOLD:-100}"
-RESPONSE_TIME_THRESHOLD="${RESPONSE_TIME_THRESHOLD:-2}"
-UPTIME_THRESHOLD="${UPTIME_THRESHOLD:-95}"
-ERROR_LOG_THRESHOLD="${ERROR_LOG_THRESHOLD:-10}"
-PLUGIN_UPDATE_THRESHOLD="${PLUGIN_UPDATE_THRESHOLD:-5}"
-THEME_UPDATE_THRESHOLD="${THEME_UPDATE_THRESHOLD:-2}"
-CORE_UPDATE_THRESHOLD="${CORE_UPDATE_THRESHOLD:-1}"
+# --- Define Default Thresholds ---
+# These can be overridden by variables in the sourced THRESHOLD_FILE or the main CONFIG_FILE.
+DISK_THRESHOLD="${DISK_THRESHOLD:-90}"          # % disk usage
+CPU_THRESHOLD="${CPU_THRESHOLD:-80}"            # % CPU usage
+MEMORY_THRESHOLD="${MEMORY_THRESHOLD:-80}"      # % memory usage
+LOAD_THRESHOLD="${LOAD_THRESHOLD:-2.0}"         # 1-min load average (float)
+CONNECTIONS_THRESHOLD="${CONNECTIONS_THRESHOLD:-100}" # Number of active established connections
+RESPONSE_TIME_THRESHOLD="${RESPONSE_TIME_THRESHOLD:-2.0}" # Site response time in seconds (float)
+# UPTIME_THRESHOLD is not actively used in checks below, but defined here for completeness if needed later.
+# UPTIME_THRESHOLD="${UPTIME_THRESHOLD:-95}" # % uptime (would require persistent state or external tool)
+ERROR_LOG_THRESHOLD="${ERROR_LOG_THRESHOLD:-10}"    # Max PHP errors in debug.log in last 24h
+PLUGIN_UPDATE_THRESHOLD="${PLUGIN_UPDATE_THRESHOLD:-5}" # Max pending plugin updates
+THEME_UPDATE_THRESHOLD="${THEME_UPDATE_THRESHOLD:-2}"  # Max pending theme updates
+CORE_UPDATE_THRESHOLD="${CORE_UPDATE_THRESHOLD:-1}"    # Max pending core updates (usually 0 or 1)
 
-# Check required variables
-for var in wpPath; do
-    if [ -z "${!var}" ]; then
-        echo -e "${RED}${BOLD}Error: Required variable $var is not set in $CONFIG_FILE!${NC}" >&2
+# Validate required variables from the main config file
+for var_name in wpPath; do # wpPath is crucial for WordPress specific checks
+    if [ -z "${!var_name}" ]; then
+        log "ERROR" "Required variable '$var_name' is not set in configuration file '$CONFIG_FILE'."
         exit 1
     fi
 done
 
-# Check if wp-config.php exists in wpPath or one directory above it
+# Locate wp-config.php
 if [ -f "$wpPath/wp-config.php" ]; then
     WP_CONFIG="$wpPath/wp-config.php"
-elif [ -f "$(dirname "$wpPath")/wp-config.php" ]; then
+elif [ -f "$(dirname "$wpPath")/wp-config.php" ]; then # Handles cases like wpPath being 'wordpress' subdir
     WP_CONFIG="$(dirname "$wpPath")/wp-config.php"
+    log "INFO" "wp-config.php found in parent directory: $WP_CONFIG"
 else
-    echo -e "${RED}${BOLD}Error: wp-config.php not found in $wpPath or its parent directory!${NC}" >&2
+    log "ERROR" "wp-config.php not found in '$wpPath' or its parent directory."
     exit 1
 fi
 
-# Check if WP-CLI is installed
+# Check if WP-CLI is installed (essential for many WordPress checks)
 if ! command_exists wp; then
-    echo -e "${RED}${BOLD}Error: WP-CLI is not installed!${NC}" >&2
-    echo -e "${YELLOW}Please install WP-CLI and try again: https://wp-cli.org/#installing${NC}" >&2
+    log "ERROR" "WP-CLI command ('wp') not found. It is required for WordPress monitoring."
+    if ! $QUIET; then
+        echo -e "${RED}${BOLD}Error: WP-CLI is not installed or not in PATH!${NC}" >&2
+        echo -e "${YELLOW}Please install WP-CLI and ensure it's in your PATH. See: https://wp-cli.org/#installing${NC}" >&2
+    fi
     exit 1
 fi
 
-# Cleanup function for trapping signals
+# --- Cleanup Function for Trap ---
 cleanup_monitor() {
-    cleanup "Monitor process" "Monitor"
+    # Call common cleanup if needed, then script-specific cleanup
+    cleanup "WordPress Monitor process (invoked by trap)" "Monitor Cleanup"
+    log "INFO" "Monitor process ended."
+    # Any specific temp files for monitor.sh would be cleaned here.
 }
-trap cleanup_monitor INT TERM
+trap cleanup_monitor EXIT INT TERM
 
-# Start monitoring process
-log "INFO" "Starting WordPress monitoring process"
-update_status "STARTED" "WordPress monitoring process"
+# --- Main Monitoring Process Start ---
+log "INFO" "Starting WordPress monitoring process for site: ${wpHost:-$(basename "$wpPath")}."
+update_status "STARTED" "WordPress monitoring process for ${wpHost:-$(basename "$wpPath")}"
 
-# Initialize report and metrics files
-if [ "$DRY_RUN" = false ]; then
+# Initialize report and metrics files if not in dry run
+if [ "$DRY_RUN" = "false" ]; then
+    # Create/Truncate the report file for this run
     echo "WordPress Monitoring Report - $(date)" > "$REPORT_FILE"
     echo "=======================================" >> "$REPORT_FILE"
+    echo "Site: ${wpHost:-$(basename "$wpPath")} ($wpPath)" >> "$REPORT_FILE"
     echo "" >> "$REPORT_FILE"
+    log "INFO" "Report file initialized: $REPORT_FILE"
 
-    # Create metrics CSV header if it doesn't exist
+    # Create metrics CSV header if the file doesn't exist
     if [ ! -f "$METRICS_FILE" ]; then
-        echo "timestamp,disk_usage,cpu_usage,memory_usage,load_avg,connections,response_time,uptime,error_count,plugin_updates,theme_updates,core_updates" > "$METRICS_FILE"
+        echo "timestamp,wp_path,disk_usage_percent,cpu_usage_percent,memory_usage_percent,load_avg_1min,active_connections,site_response_time_s,server_uptime_str,php_errors_24h,plugin_updates_count,theme_updates_count,core_updates_count" > "$METRICS_FILE"
+        log "INFO" "Metrics CSV file created with header: $METRICS_FILE"
     fi
 else
-    log "INFO" "Dry run: Skipping report file initialization"
+    log "INFO" "[Dry Run] Skipping report and metrics file initialization."
 fi
 
-# Function to check disk usage
+# --- Monitoring Check Functions ---
+
+# Check disk usage for a given path
+# Args: $1 (path_to_check), $2 (threshold_percent)
 check_disk_usage() {
-    local path="$1"
-    local threshold="$2"
-    local usage
+    local check_path="$1"
+    local alert_threshold="$2"
+    local usage_percent
+    local status_ok=true
 
-    usage=$(df -h "$path" | awk 'NR==2 {print $5}' | sed 's/%//')
+    usage_percent=$(df -P "$check_path" | awk 'NR==2 {print $5}' | sed 's/%//') # -P for POSIX output
+    if [ -z "$usage_percent" ]; then
+        log "WARNING" "Could not determine disk usage for '$check_path'."
+        echo "Disk Usage ($check_path): Error determining usage" >> "$REPORT_FILE"
+        return 1 # Indicate an issue with the check itself
+    fi
 
-    if [ "$DRY_RUN" = false ]; then
-        echo "Disk Usage: ${usage}% (Threshold: ${threshold}%)" >> "$REPORT_FILE"
-
-        if [ "$usage" -ge "$threshold" ]; then
-            echo "  [WARNING] Disk usage is above threshold!" >> "$REPORT_FILE"
-            log "WARNING" "Disk usage is above threshold: ${usage}% >= ${threshold}%"
-
-            if [ "$QUIET" = false ]; then
-                echo -e "${YELLOW}${BOLD}Warning:${NC} Disk usage is above threshold: ${usage}% >= ${threshold}%"
-            fi
-
-            return 1
+    if [ "$DRY_RUN" = "false" ]; then
+        echo "Disk Usage ($check_path): ${usage_percent}% (Threshold: >${alert_threshold}%)" >> "$REPORT_FILE"
+        if [ "$usage_percent" -ge "$alert_threshold" ]; then
+            echo "  [ALERT] Disk usage is high!" >> "$REPORT_FILE"
+            log "ALERT" "High disk usage for '$check_path': ${usage_percent}% (Threshold: ${alert_threshold}%)"
+            if ! $QUIET; then echo -e "${YELLOW}${BOLD}ALERT:${NC} High disk usage for '$check_path': ${usage_percent}% (Threshold: ${alert_threshold}%)${NC}"; fi
+            status_ok=false
         else
-            log "INFO" "Disk usage is normal: ${usage}% < ${threshold}%"
-
-            if [ "$QUIET" = false ] && [ "$ALERT_ONLY" = false ]; then
-                echo -e "${GREEN}Disk usage is normal:${NC} ${usage}% < ${threshold}%"
-            fi
-
-            return 0
+            log "INFO" "Disk usage for '$check_path' is normal: ${usage_percent}%."
+            if ! $QUIET && [ "$ALERT_ONLY" = false ]; then echo -e "${GREEN}Disk usage ($check_path):${NC} ${usage_percent}% (OK)${NC}"; fi
         fi
     else
-        log "INFO" "Dry run: Would check disk usage"
-        return 0
+        log "INFO" "[Dry Run] Would check disk usage for '$check_path' against threshold ${alert_threshold}%."
     fi
+    if $status_ok; then return 0; else return 1; fi
 }
 
-# Function to check CPU usage
+# Check CPU usage
+# Args: $1 (threshold_percent)
 check_cpu_usage() {
-    local threshold="$1"
-    local usage
+    local alert_threshold="$1"
+    local usage_percent_val="N/A" # Default if cannot determine
+    local status_ok=true
 
     if command_exists mpstat; then
-        usage=$(mpstat 1 1 | awk '$12 ~ /[0-9.]+/ {print 100 - $12}' | tail -n 1)
+        # Average CPU idle time, subtract from 100 for usage. mpstat 1 1 means 1-second interval, 1 report.
+        usage_percent_val=$(mpstat 1 1 | awk '/Average:/ {print 100 - $NF}' | cut -d. -f1) # $NF is %idle for 'Average:' line
+    elif command_exists top; then
+        # Get %us + %sy (user + system)
+        usage_percent_val=$(top -bn1 | grep "Cpu(s)" | head -n1 | awk '{print $2 + $4}' | cut -d. -f1)
     else
-        usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')
+        log "WARNING" "Cannot determine CPU usage: 'mpstat' or 'top' command not found."
+        echo "CPU Usage: Unavailable (mpstat/top not found)" >> "$REPORT_FILE"
+        return 1 # Issue with the check
+    fi
+    
+    if [ -z "$usage_percent_val" ] || ! [[ "$usage_percent_val" =~ ^[0-9]+$ ]]; then
+        log "WARNING" "Failed to parse CPU usage. Raw output was problematic."
+        usage_percent_val="N/A" # Could not parse
+        echo "CPU Usage: Error parsing value" >> "$REPORT_FILE"
+        return 1
     fi
 
-    usage=${usage%.*}
-
-    if [ "$DRY_RUN" = false ]; then
-        echo "CPU Usage: ${usage}% (Threshold: ${threshold}%)" >> "$REPORT_FILE"
-
-        if [ "$usage" -ge "$threshold" ]; then
-            echo "  [WARNING] CPU usage is above threshold!" >> "$REPORT_FILE"
-            log "WARNING" "CPU usage is above threshold: ${usage}% >= ${threshold}%"
-
-            if [ "$QUIET" = false ]; then
-                echo -e "${YELLOW}${BOLD}Warning:${NC} CPU usage is above threshold: ${usage}% >= ${threshold}%"
-            fi
-
-            return 1
-        else
-            log "INFO" "CPU usage is normal: ${usage}% < ${threshold}%"
-
-            if [ "$QUIET" = false ] && [ "$ALERT_ONLY" = false ]; then
-                echo -e "${GREEN}CPU usage is normal:${NC} ${usage}% < ${threshold}%"
-            fi
-
-            return 0
+    if [ "$DRY_RUN" = "false" ]; then
+        echo "CPU Usage: ${usage_percent_val}% (Threshold: >${alert_threshold}%)" >> "$REPORT_FILE"
+        if [ "$usage_percent_val" != "N/A" ] && [ "$usage_percent_val" -ge "$alert_threshold" ]; then
+            echo "  [ALERT] CPU usage is high!" >> "$REPORT_FILE"
+            log "ALERT" "High CPU usage: ${usage_percent_val}% (Threshold: ${alert_threshold}%)"
+            if ! $QUIET; then echo -e "${YELLOW}${BOLD}ALERT:${NC} High CPU usage: ${usage_percent_val}% (Threshold: ${alert_threshold}%)${NC}"; fi
+            status_ok=false
+        elif [ "$usage_percent_val" != "N/A" ]; then
+            log "INFO" "CPU usage is normal: ${usage_percent_val}%."
+            if ! $QUIET && [ "$ALERT_ONLY" = false ]; then echo -e "${GREEN}CPU usage:${NC} ${usage_percent_val}% (OK)${NC}"; fi
         fi
     else
-        log "INFO" "Dry run: Would check CPU usage"
-        return 0
+        log "INFO" "[Dry Run] Would check CPU usage against threshold ${alert_threshold}%."
     fi
+    if $status_ok; then return 0; else return 1; fi
 }
 
-# Function to check memory usage
+# Check memory usage
+# Args: $1 (threshold_percent)
 check_memory_usage() {
-    local threshold="$1"
-    local usage
+    local alert_threshold="$1"
+    local usage_percent_val
+    local status_ok=true
 
-    usage=$(free | grep Mem | awk '{print int($3/$2 * 100)}')
+    usage_percent_val=$(free | grep Mem | awk '{print int($3/$2 * 100.0)}') # Used/Total
+    if [ -z "$usage_percent_val" ]; then
+        log "WARNING" "Could not determine memory usage."
+        echo "Memory Usage: Error determining usage" >> "$REPORT_FILE"
+        return 1
+    fi
 
-    if [ "$DRY_RUN" = false ]; then
-        echo "Memory Usage: ${usage}% (Threshold: ${threshold}%)" >> "$REPORT_FILE"
-
-        if [ "$usage" -ge "$threshold" ]; then
-            echo "  [WARNING] Memory usage is above threshold!" >> "$REPORT_FILE"
-            log "WARNING" "Memory usage is above threshold: ${usage}% >= ${threshold}%"
-
-            if [ "$QUIET" = false ]; then
-                echo -e "${YELLOW}${BOLD}Warning:${NC} Memory usage is above threshold: ${usage}% >= ${threshold}%"
-            fi
-
-            return 1
+    if [ "$DRY_RUN" = "false" ]; then
+        echo "Memory Usage: ${usage_percent_val}% (Threshold: >${alert_threshold}%)" >> "$REPORT_FILE"
+        if [ "$usage_percent_val" -ge "$alert_threshold" ]; then
+            echo "  [ALERT] Memory usage is high!" >> "$REPORT_FILE"
+            log "ALERT" "High memory usage: ${usage_percent_val}% (Threshold: ${alert_threshold}%)"
+            if ! $QUIET; then echo -e "${YELLOW}${BOLD}ALERT:${NC} High memory usage: ${usage_percent_val}% (Threshold: ${alert_threshold}%)${NC}"; fi
+            status_ok=false
         else
-            log "INFO" "Memory usage is normal: ${usage}% < ${threshold}%"
-
-            if [ "$QUIET" = false ] && [ "$ALERT_ONLY" = false ]; then
-                echo -e "${GREEN}Memory usage is normal:${NC} ${usage}% < ${threshold}%"
-            fi
-
-            return 0
+            log "INFO" "Memory usage is normal: ${usage_percent_val}%."
+            if ! $QUIET && [ "$ALERT_ONLY" = false ]; then echo -e "${GREEN}Memory usage:${NC} ${usage_percent_val}% (OK)${NC}"; fi
         fi
     else
-        log "INFO" "Dry run: Would check memory usage"
-        return 0
+        log "INFO" "[Dry Run] Would check memory usage against threshold ${alert_threshold}%."
     fi
+    if $status_ok; then return 0; else return 1; fi
 }
 
-# Function to check load average
+# Check 1-minute load average
+# Args: $1 (threshold_float)
 check_load_average() {
-    local threshold="$1"
-    local load
+    local alert_threshold_float="$1"
+    local load_avg_1min
+    local status_ok=true
 
-    load=$(uptime | awk -F'[a-z]:' '{ print $2}' | awk -F',' '{print $1}' | tr -d ' ')
+    load_avg_1min=$(uptime | awk -F'load average:' '{print $2}' | cut -d, -f1 | sed 's/ //g')
+    if [ -z "$load_avg_1min" ]; then
+        log "WARNING" "Could not determine load average."
+        echo "Load Average (1 min): Error determining value" >> "$REPORT_FILE"
+        return 1
+    fi
 
-    if [ "$DRY_RUN" = false ]; then
-        echo "Load Average (1 min): ${load} (Threshold: ${threshold})" >> "$REPORT_FILE"
-
-        if (( $(echo "$load > $threshold" | bc -l) )); then
-            echo "  [WARNING] Load average is above threshold!" >> "$REPORT_FILE"
-            log "WARNING" "Load average is above threshold: ${load} >= ${threshold}"
-
-            if [ "$QUIET" = false ]; then
-                echo -e "${YELLOW}${BOLD}Warning:${NC} Load average is above threshold: ${load} >= ${threshold}"
-            fi
-
-            return 1
+    if [ "$DRY_RUN" = "false" ]; then
+        echo "Load Average (1 min): ${load_avg_1min} (Threshold: >${alert_threshold_float})" >> "$REPORT_FILE"
+        # bc -l for floating point comparison
+        if (( $(echo "$load_avg_1min > $alert_threshold_float" | bc -l) )); then
+            echo "  [ALERT] Load average is high!" >> "$REPORT_FILE"
+            log "ALERT" "High load average (1 min): ${load_avg_1min} (Threshold: ${alert_threshold_float})"
+            if ! $QUIET; then echo -e "${YELLOW}${BOLD}ALERT:${NC} High load average (1 min): ${load_avg_1min} (Threshold: ${alert_threshold_float})${NC}"; fi
+            status_ok=false
         else
-            log "INFO" "Load average is normal: ${load} < ${threshold}"
-
-            if [ "$QUIET" = false ] && [ "$ALERT_ONLY" = false ]; then
-                echo -e "${GREEN}Load average is normal:${NC} ${load} < ${threshold}"
-            fi
-
-            return 0
+            log "INFO" "Load average (1 min) is normal: ${load_avg_1min}."
+            if ! $QUIET && [ "$ALERT_ONLY" = false ]; then echo -e "${GREEN}Load average (1 min):${NC} ${load_avg_1min} (OK)${NC}"; fi
         fi
     else
-        log "INFO" "Dry run: Would check load average"
-        return 0
+        log "INFO" "[Dry Run] Would check load average against threshold ${alert_threshold_float}."
     fi
+    if $status_ok; then return 0; else return 1; fi
 }
 
-# Function to check active connections
+# Check active established network connections
+# Args: $1 (threshold_count)
 check_connections() {
-    local threshold="$1"
-    local connections
+    local alert_threshold="$1"
+    local connections_count="N/A"
+    local status_ok=true
 
-    connections=$(netstat -an | grep ESTABLISHED | wc -l)
+    if command_exists netstat; then
+        connections_count=$(netstat -ant | grep ESTABLISHED | wc -l) # -t for TCP, -n for numeric
+    elif command_exists ss; then
+        connections_count=$(ss -nt state established | wc -l) # ss is newer alternative
+    else
+        log "WARNING" "Cannot determine active connections: 'netstat' or 'ss' command not found."
+        echo "Active Connections: Unavailable (netstat/ss not found)" >> "$REPORT_FILE"
+        return 1
+    fi
+     if [ -z "$connections_count" ]; then connections_count=0; fi # Default to 0 if parsing failed somehow
 
-    if [ "$DRY_RUN" = false ]; then
-        echo "Active Connections: ${connections} (Threshold: ${threshold})" >> "$REPORT_FILE"
-
-        if [ "$connections" -ge "$threshold" ]; then
-            echo "  [WARNING] Number of active connections is above threshold!" >> "$REPORT_FILE"
-            log "WARNING" "Number of active connections is above threshold: ${connections} >= ${threshold}"
-
-            if [ "$QUIET" = false ]; then
-                echo -e "${YELLOW}${BOLD}Warning:${NC} Number of active connections is above threshold: ${connections} >= ${threshold}"
-            fi
-
-            return 1
+    if [ "$DRY_RUN" = "false" ]; then
+        echo "Active Established Connections: ${connections_count} (Threshold: >${alert_threshold})" >> "$REPORT_FILE"
+        if [ "$connections_count" -ge "$alert_threshold" ]; then
+            echo "  [ALERT] Number of active connections is high!" >> "$REPORT_FILE"
+            log "ALERT" "High number of active connections: ${connections_count} (Threshold: ${alert_threshold})"
+            if ! $QUIET; then echo -e "${YELLOW}${BOLD}ALERT:${NC} High active connections: ${connections_count} (Threshold: ${alert_threshold})${NC}"; fi
+            status_ok=false
         else
-            log "INFO" "Number of active connections is normal: ${connections} < ${threshold}"
-
-            if [ "$QUIET" = false ] && [ "$ALERT_ONLY" = false ]; then
-                echo -e "${GREEN}Number of active connections is normal:${NC} ${connections} < ${threshold}"
-            fi
-
-            return 0
+            log "INFO" "Number of active connections is normal: ${connections_count}."
+            if ! $QUIET && [ "$ALERT_ONLY" = false ]; then echo -e "${GREEN}Active connections:${NC} ${connections_count} (OK)${NC}"; fi
         fi
     else
-        log "INFO" "Dry run: Would check active connections"
-        return 0
+        log "INFO" "[Dry Run] Would check active connections against threshold ${alert_threshold}."
     fi
+    if $status_ok; then return 0; else return 1; fi
 }
 
-# Function to check WordPress response time
+# Check WordPress site response time
+# Args: $1 (site_url), $2 (threshold_seconds_float)
 check_response_time() {
-    local url="$1"
-    local threshold="$2"
-    local response_time
+    local site_url_to_check="$1"
+    local alert_threshold_s_float="$2"
+    local response_time_s="N/A"
+    local status_ok=true
 
-    if command_exists curl; then
-        response_time=$(curl -s -w "%{time_total}\n" -o /dev/null "$url")
-    else
-        log "WARNING" "curl command not found, skipping response time check"
-        echo "  [WARNING] curl command not found, skipping response time check" >> "$REPORT_FILE"
-        return 0
+    if ! command_exists curl; then
+        log "WARNING" "'curl' command not found. Skipping site response time check."
+        echo "Site Response Time ($site_url_to_check): Unavailable (curl not found)" >> "$REPORT_FILE"
+        return 1 # Issue with the check
     fi
 
-    if [ "$DRY_RUN" = false ]; then
-        echo "Response Time: ${response_time}s (Threshold: ${threshold}s)" >> "$REPORT_FILE"
+    # -L to follow redirects, -s silent, -o /dev/null discard output, -w time_total
+    response_time_s=$(curl -L -s -w "%{time_total}" -o /dev/null "$site_url_to_check" 2>/dev/null)
+    if [ -z "$response_time_s" ]; then
+        log "WARNING" "Could not determine response time for '$site_url_to_check'. URL might be unreachable."
+        echo "Site Response Time ($site_url_to_check): Error fetching URL" >> "$REPORT_FILE"
+        response_time_s="N/A" # Set to N/A to avoid bc error
+        status_ok=false # Consider this an alert
+    fi
 
-        if (( $(echo "$response_time > $threshold" | bc -l) )); then
-            echo "  [WARNING] Response time is above threshold!" >> "$REPORT_FILE"
-            log "WARNING" "Response time is above threshold: ${response_time}s >= ${threshold}s"
-
-            if [ "$QUIET" = false ]; then
-                echo -e "${YELLOW}${BOLD}Warning:${NC} Response time is above threshold: ${response_time}s >= ${threshold}s"
-            fi
-
-            return 1
-        else
-            log "INFO" "Response time is normal: ${response_time}s < ${threshold}s"
-
-            if [ "$QUIET" = false ] && [ "$ALERT_ONLY" = false ]; then
-                echo -e "${GREEN}Response time is normal:${NC} ${response_time}s < ${threshold}s"
-            fi
-
-            return 0
+    if [ "$DRY_RUN" = "false" ]; then
+        echo "Site Response Time ($site_url_to_check): ${response_time_s}s (Threshold: >${alert_threshold_s_float}s)" >> "$REPORT_FILE"
+        if [ "$response_time_s" != "N/A" ] && (( $(echo "$response_time_s > $alert_threshold_s_float" | bc -l) )); then
+            echo "  [ALERT] Site response time is high!" >> "$REPORT_FILE"
+            log "ALERT" "High site response time for '$site_url_to_check': ${response_time_s}s (Threshold: ${alert_threshold_s_float}s)"
+            if ! $QUIET; then echo -e "${YELLOW}${BOLD}ALERT:${NC} High site response time for '$site_url_to_check': ${response_time_s}s (Threshold: ${alert_threshold_s_float}s)${NC}"; fi
+            status_ok=false
+        elif [ "$response_time_s" != "N/A" ]; then
+            log "INFO" "Site response time for '$site_url_to_check' is normal: ${response_time_s}s."
+            if ! $QUIET && [ "$ALERT_ONLY" = false ]; then echo -e "${GREEN}Site response time ($site_url_to_check):${NC} ${response_time_s}s (OK)${NC}"; fi
         fi
     else
-        log "INFO" "Dry run: Would check response time"
-        return 0
+        log "INFO" "[Dry Run] Would check response time for '$site_url_to_check' against threshold ${alert_threshold_s_float}s."
     fi
+    if $status_ok; then return 0; else return 1; fi
 }
 
-# Function to check WordPress updates
+# Check WordPress for pending updates (plugins, themes, core)
+# Args: $1 (wp_install_path), $2 (plugin_update_threshold), $3 (theme_update_threshold), $4 (core_update_threshold)
 check_wp_updates() {
-    local wp_path="$1"
-    local plugin_threshold="$2"
-    local theme_threshold="$3"
-    local core_threshold="$4"
+    local wp_install_path="$1"
+    local plugin_alert_thresh="$2"
+    local theme_alert_thresh="$3"
+    local core_alert_thresh="$4" # Usually 1, meaning any core update is an alert
     
-    local plugin_updates=0
-    local theme_updates=0
-    local core_updates=0
-    
-    if [ "$DRY_RUN" = false ]; then
-        # Check plugin updates
-        if plugin_updates_output=$(wp plugin list --update=available --format=count --path="$wp_path" 2>/dev/null); then
-            plugin_updates=$plugin_updates_output
-        fi
-        
-        # Check theme updates
-        if theme_updates_output=$(wp theme list --update=available --format=count --path="$wp_path" 2>/dev/null); then
-            theme_updates=$theme_updates_output
-        fi
-        
-        # Check core updates
-        if core_updates_output=$(wp core check-update --format=count --path="$wp_path" 2>/dev/null); then
-            core_updates=$core_updates_output
-        fi
+    local plugin_updates_count=0
+    local theme_updates_count=0
+    local core_updates_count=0 # 0 = no update, 1 = update available
+    local current_issues_count=0
+
+    if [ "$DRY_RUN" = "false" ]; then
+        log "INFO" "Checking for WordPress updates at '$wp_install_path'..."
+        # Get counts using wp-cli
+        plugin_updates_count=$(wp_cli plugin list --update=available --format=count --path="$wp_install_path" 2>/dev/null || echo 0)
+        theme_updates_count=$(wp_cli theme list --update=available --format=count --path="$wp_install_path" 2>/dev/null || echo 0)
+        # `wp core check-update` returns list of updates. Count lines for a simple metric.
+        # Better: `wp core check-update --format=json` and parse, or use `--format=count` if available for `check-update`
+        # As of WP-CLI 2.5.0, `wp core check-update --format=count` is valid.
+        core_updates_count=$(wp_cli core check-update --format=count --path="$wp_install_path" 2>/dev/null || echo 0)
         
         echo "WordPress Updates:" >> "$REPORT_FILE"
-        echo "  Plugins: $plugin_updates (Threshold: $plugin_threshold)" >> "$REPORT_FILE"
-        echo "  Themes: $theme_updates (Threshold: $theme_threshold)" >> "$REPORT_FILE"
-        echo "  Core: $core_updates (Threshold: $core_threshold)" >> "$REPORT_FILE"
+        echo "  Pending Plugin Updates: $plugin_updates_count (Threshold: >=$plugin_alert_thresh)" >> "$REPORT_FILE"
+        echo "  Pending Theme Updates:  $theme_updates_count (Threshold: >=$theme_alert_thresh)" >> "$REPORT_FILE"
+        echo "  Pending Core Updates:   $core_updates_count (Threshold: >=$core_alert_thresh)" >> "$REPORT_FILE"
         
-        local issues=0
-        
-        if [ "$plugin_updates" -ge "$plugin_threshold" ]; then
-            echo "  [WARNING] Number of plugin updates is above threshold!" >> "$REPORT_FILE"
-            log "WARNING" "Number of plugin updates is above threshold: ${plugin_updates} >= ${plugin_threshold}"
-            
-            if [ "$QUIET" = false ]; then
-                echo -e "${YELLOW}${BOLD}Warning:${NC} Number of plugin updates is above threshold: ${plugin_updates} >= ${plugin_threshold}"
-            fi
-            
-            issues=$((issues+1))
+        if [ "$plugin_updates_count" -ge "$plugin_alert_thresh" ]; then
+            echo "  [ALERT] Number of pending plugin updates exceeds threshold." >> "$REPORT_FILE"
+            log "ALERT" "High number of pending plugin updates: ${plugin_updates_count} (Threshold: ${plugin_alert_thresh})"
+            if ! $QUIET; then echo -e "${YELLOW}${BOLD}ALERT:${NC} Pending plugin updates: ${plugin_updates_count} (Threshold: ${plugin_alert_thresh})${NC}"; fi
+            current_issues_count=$((current_issues_count + 1))
+        fi
+        if [ "$theme_updates_count" -ge "$theme_alert_thresh" ]; then
+            echo "  [ALERT] Number of pending theme updates exceeds threshold." >> "$REPORT_FILE"
+            log "ALERT" "High number of pending theme updates: ${theme_updates_count} (Threshold: ${theme_alert_thresh})"
+            if ! $QUIET; then echo -e "${YELLOW}${BOLD}ALERT:${NC} Pending theme updates: ${theme_updates_count} (Threshold: ${theme_alert_thresh})${NC}"; fi
+            current_issues_count=$((current_issues_count + 1))
+        fi
+        if [ "$core_updates_count" -ge "$core_alert_thresh" ]; then # Any core update is usually an alert
+            echo "  [ALERT] WordPress core update(s) available." >> "$REPORT_FILE"
+            log "ALERT" "WordPress core update(s) available: ${core_updates_count}"
+            if ! $QUIET; then echo -e "${YELLOW}${BOLD}ALERT:${NC} WordPress core update(s) available: ${core_updates_count}${NC}"; fi
+            current_issues_count=$((current_issues_count + 1))
         fi
         
-        if [ "$theme_updates" -ge "$theme_threshold" ]; then
-            echo "  [WARNING] Number of theme updates is above threshold!" >> "$REPORT_FILE"
-            log "WARNING" "Number of theme updates is above threshold: ${theme_updates} >= ${theme_threshold}"
-            
-            if [ "$QUIET" = false ]; then
-                echo -e "${YELLOW}${BOLD}Warning:${NC} Number of theme updates is above threshold: ${theme_updates} >= ${theme_threshold}"
-            fi
-            
-            issues=$((issues+1))
+        if [ "$current_issues_count" -eq 0 ]; then
+            log "INFO" "WordPress updates check: No issues found (within thresholds)."
+            if ! $QUIET && [ "$ALERT_ONLY" = false ]; then echo -e "${GREEN}WordPress updates status: OK${NC}"; fi
         fi
-        
-        if [ "$core_updates" -ge "$core_threshold" ]; then
-            echo "  [WARNING] WordPress core update available!" >> "$REPORT_FILE"
-            log "WARNING" "WordPress core update available: ${core_updates} >= ${core_threshold}"
-            
-            if [ "$QUIET" = false ]; then
-                echo -e "${YELLOW}${BOLD}Warning:${NC} WordPress core update available: ${core_updates} >= ${core_threshold}"
-            fi
-            
-            issues=$((issues+1))
-        fi
-        
-        if [ "$issues" -eq 0 ] && [ "$QUIET" = false ] && [ "$ALERT_ONLY" = false ]; then
-            echo -e "${GREEN}WordPress is up to date.${NC}"
-        fi
-        
-        return $issues
+        return "$current_issues_count" # Return number of update-related issues found
     else
-        log "INFO" "Dry run: Would check WordPress updates"
-        return 0
+        log "INFO" "[Dry Run] Would check WordPress updates (plugins, themes, core)."
+        return 0 # No issues in dry run for counting
     fi
 }
 
-# Function to check WordPress error log
+# Check WordPress PHP error log (debug.log)
+# Args: $1 (wp_install_path), $2 (error_count_threshold_24h)
 check_wp_errors() {
-    local wp_path="$1"
-    local threshold="$2"
-    local error_count=0
-    local error_log="$wp_path/wp-content/debug.log"
-    
-    if [ "$DRY_RUN" = false ]; then
-        if [ -f "$error_log" ]; then
-            # Count PHP errors in the last 24 hours
-            error_count=$(find "$error_log" -mtime -1 -exec cat {} \; | grep -c "PHP")
-            
-            echo "WordPress Error Log:" >> "$REPORT_FILE"
-            echo "  Errors in last 24h: $error_count (Threshold: $threshold)" >> "$REPORT_FILE"
-            
-            if [ "$error_count" -ge "$threshold" ]; then
-                echo "  [WARNING] Number of PHP errors is above threshold!" >> "$REPORT_FILE"
-                log "WARNING" "Number of PHP errors is above threshold: ${error_count} >= ${threshold}"
-                
-                if [ "$QUIET" = false ]; then
-                    echo -e "${YELLOW}${BOLD}Warning:${NC} Number of PHP errors is above threshold: ${error_count} >= ${threshold}"
-                    echo -e "${YELLOW}Recent errors:${NC}"
-                    tail -n 5 "$error_log" | sed 's/^/  /'
-                fi
-                
-                return 1
+    local wp_install_path="$1"
+    local alert_threshold="$2"
+    local errors_last_24h=0
+    local wp_error_log="$wp_install_path/wp-content/debug.log" # Standard location
+    local status_ok=true
+
+    if [ "$DRY_RUN" = "false" ]; then
+        echo "WordPress PHP Error Log Check ($wp_error_log):" >> "$REPORT_FILE"
+        if [ -f "$wp_error_log" ]; then
+            # Count lines containing "PHP Fatal error", "PHP Parse error", "PHP Warning", "PHP Notice" in last 24 hours
+            # `find ... -mtime -1` finds files modified in the last 24 hours. We need to check content from last 24h.
+            # This is tricky with log rotation. A simpler check counts recent lines.
+            # For now, counting specific PHP error types in the whole file if recently modified.
+            # A more robust solution would parse timestamps within the log.
+            if [ "$(find "$wp_error_log" -mmin -1440 2>/dev/null)" ]; then # Modified in last 24 mins (1440 mins = 24h)
+                errors_last_24h=$(grep -E "PHP Fatal error:|PHP Parse error:|PHP Warning:|PHP Notice:" "$wp_error_log" | wc -l)
+                # This counts all historical errors if file was touched. A better way is needed for "errors in last 24h".
+                # Placeholder: for simplicity, this example counts all known errors in the file.
+                # A real solution: `awk` with timestamp parsing or use a log monitoring tool.
+                # For now, let's assume `errors_last_24h` is the total count if log was modified recently.
+                log "INFO" "Checked PHP error log '$wp_error_log'. Found $errors_last_24h PHP error entries."
             else
-                log "INFO" "Number of PHP errors is normal: ${error_count} < ${threshold}"
-                
-                if [ "$QUIET" = false ] && [ "$ALERT_ONLY" = false ]; then
-                    echo -e "${GREEN}Number of PHP errors is normal:${NC} ${error_count} < ${threshold}"
+                log "INFO" "PHP error log '$wp_error_log' not modified in the last 24 hours. Assuming 0 recent errors."
+                errors_last_24h=0
+            fi
+            
+            echo "  PHP Errors (approx total): $errors_last_24h (Threshold for recent: >$alert_threshold)" >> "$REPORT_FILE"
+            if [ "$errors_last_24h" -ge "$alert_threshold" ]; then
+                echo "  [ALERT] Number of PHP errors is high." >> "$REPORT_FILE"
+                echo "  Last 5 lines from error log:" >> "$REPORT_FILE"
+                tail -n 5 "$wp_error_log" | sed 's/^/    /' >> "$REPORT_FILE"
+                log "ALERT" "High number of PHP errors in '$wp_error_log': ${errors_last_24h} (Threshold: ${alert_threshold})"
+                if ! $QUIET; then
+                    echo -e "${YELLOW}${BOLD}ALERT:${NC} High PHP error count in '$wp_error_log': ${errors_last_24h} (Threshold: ${alert_threshold})${NC}"
+                    echo -e "${YELLOW}Recent errors from log:${NC}"
+                    tail -n 5 "$wp_error_log" | sed 's/^/  /'
                 fi
-                
-                return 0
+                status_ok=false
+            else
+                log "INFO" "PHP error log check: No significant issues found."
+                if ! $QUIET && [ "$ALERT_ONLY" = false ]; then echo -e "${GREEN}PHP error log status: OK${NC}"; fi
             fi
         else
-            echo "  [INFO] WordPress error log not found at $error_log" >> "$REPORT_FILE"
-            log "INFO" "WordPress error log not found at $error_log"
-            
-            if [ "$QUIET" = false ] && [ "$ALERT_ONLY" = false ]; then
-                echo -e "${CYAN}WordPress error log not found at $error_log${NC}"
-            fi
-            
-            return 0
+            echo "  PHP Error Log not found or not enabled." >> "$REPORT_FILE"
+            log "INFO" "WordPress PHP error log ('$wp_error_log') not found. WP_DEBUG_LOG might be false."
+            if ! $QUIET && [ "$ALERT_ONLY" = false ]; then echo -e "${CYAN}PHP error log '$wp_error_log' not found (this might be normal).${NC}"; fi
         fi
     else
-        log "INFO" "Dry run: Would check WordPress error log"
-        return 0
+        log "INFO" "[Dry Run] Would check WordPress PHP error log."
     fi
+    if $status_ok; then return 0; else return 1; fi
 }
 
-# Function to check WordPress database size
+# Check WordPress database size
+# Args: $1 (wp_install_path)
 check_wp_db_size() {
-    local wp_path="$1"
-    local db_size=0
-    
-    if [ "$DRY_RUN" = false ]; then
-        # Get database size
-        if db_size_output=$(wp db size --format=tables --path="$wp_path" 2>/dev/null | tail -n 1 | awk '{print $2}'); then
-            db_size=$db_size_output
+    local wp_install_path="$1"
+    local db_size_str="N/A"
+
+    if [ "$DRY_RUN" = "false" ]; then
+        # wp db size returns size like "12.34 MB"
+        db_size_str=$(wp_cli db size --path="$wp_install_path" 2>/dev/null)
+        if [ -z "$db_size_str" ]; then
+            db_size_str="Error determining size"
+            log "WARNING" "Could not determine WordPress database size for '$wp_install_path'."
+        else
+            log "INFO" "WordPress database size for '$wp_install_path': $db_size_str."
         fi
-        
-        echo "WordPress Database:" >> "$REPORT_FILE"
-        echo "  Size: $db_size" >> "$REPORT_FILE"
-        
-        log "INFO" "WordPress database size: $db_size"
-        
-        if [ "$QUIET" = false ] && [ "$ALERT_ONLY" = false ]; then
-            echo -e "${GREEN}WordPress database size:${NC} $db_size"
-        fi
-        
-        return 0
+        echo "WordPress Database Size: $db_size_str" >> "$REPORT_FILE"
+        if ! $QUIET && [ "$ALERT_ONLY" = false ]; then echo -e "${GREEN}WordPress Database Size:${NC} $db_size_str${NC}"; fi
     else
-        log "INFO" "Dry run: Would check WordPress database size"
-        return 0
+        log "INFO" "[Dry Run] Would check WordPress database size for '$wp_install_path'."
     fi
+    return 0 # This check is informational, no threshold by default
 }
 
-# Function to check WordPress security
+# Check basic WordPress security settings
+# Args: $1 (wp_install_path)
 check_wp_security() {
-    local wp_path="$1"
-    local issues=0
-    
-    if [ "$DRY_RUN" = false ]; then
-        echo "WordPress Security:" >> "$REPORT_FILE"
+    local wp_install_path="$1"
+    local current_issues_count=0
+
+    if [ "$DRY_RUN" = "false" ]; then
+        log "INFO" "Checking basic WordPress security settings for '$wp_install_path'..."
+        echo "WordPress Security Checks:" >> "$REPORT_FILE"
         
-        # Check file permissions
-        if ! wp_version=$(wp core version --path="$wp_path" 2>/dev/null); then
-            wp_version="Unknown"
+        # Check WP_DEBUG status
+        if grep -qE "define\s*\(\s*['\"]WP_DEBUG['\"]\s*,\s*true\s*\)" "$WP_CONFIG"; then
+            echo "  [ALERT] WP_DEBUG is enabled in $WP_CONFIG. Should be false on production." >> "$REPORT_FILE"
+            log "ALERT" "Security: WP_DEBUG is enabled in production for '$wp_install_path'."
+            if ! $QUIET; then echo -e "${YELLOW}${BOLD}ALERT:${NC} WP_DEBUG is enabled. Disable on production sites.${NC}"; fi
+            current_issues_count=$((current_issues_count + 1))
+        else
+            echo "  WP_DEBUG: OK (not enabled or explicitly false)" >> "$REPORT_FILE"
+            log "INFO" "Security: WP_DEBUG check passed for '$wp_install_path'."
+        fi
+
+        # Check DISALLOW_FILE_EDIT
+        if ! grep -qE "define\s*\(\s*['\"]DISALLOW_FILE_EDIT['\"]\s*,\s*true\s*\)" "$WP_CONFIG"; then
+            echo "  [ALERT] DISALLOW_FILE_EDIT is not set to true in $WP_CONFIG. Theme/plugin editor is enabled." >> "$REPORT_FILE"
+            log "ALERT" "Security: DISALLOW_FILE_EDIT is not true for '$wp_install_path'."
+            if ! $QUIET; then echo -e "${YELLOW}${BOLD}ALERT:${NC} DISALLOW_FILE_EDIT is not set to true. Consider adding it for security.${NC}"; fi
+            current_issues_count=$((current_issues_count + 1))
+        else
+             echo "  DISALLOW_FILE_EDIT: OK (set to true)" >> "$REPORT_FILE"
+            log "INFO" "Security: DISALLOW_FILE_EDIT check passed for '$wp_install_path'."
         fi
         
-        # Check if debug mode is enabled
-        if grep -q "define.*WP_DEBUG.*true" "$WP_CONFIG"; then
-            echo "  [WARNING] WP_DEBUG is enabled in production!" >> "$REPORT_FILE"
-            log "WARNING" "WP_DEBUG is enabled in production"
-            
-            if [ "$QUIET" = false ]; then
-                echo -e "${YELLOW}${BOLD}Warning:${NC} WP_DEBUG is enabled in production"
-            fi
-            
-            issues=$((issues+1))
+        # Check for exposed readme.html
+        if [ -f "$wp_install_path/readme.html" ]; then
+            echo "  [ALERT] WordPress readme.html file exists at the root. This can expose version information." >> "$REPORT_FILE"
+            log "ALERT" "Security: readme.html found at '$wp_install_path/readme.html'."
+            if ! $QUIET; then echo -e "${YELLOW}${BOLD}ALERT:${NC} readme.html found. Consider removing it from public access.${NC}"; fi
+            current_issues_count=$((current_issues_count + 1))
+        else
+            echo "  readme.html: OK (not found at root)" >> "$REPORT_FILE"
+            log "INFO" "Security: readme.html check passed for '$wp_install_path'."
         fi
         
-        # Check if file editing is enabled
-        if ! grep -q "define.*DISALLOW_FILE_EDIT.*true" "$WP_CONFIG"; then
-            echo "  [WARNING] DISALLOW_FILE_EDIT is not set" >> "$REPORT_FILE"
-            log "WARNING" "DISALLOW_FILE_EDIT is not set"
-            
-            if [ "$QUIET" = false ]; then
-                echo -e "${YELLOW}${BOLD}Warning:${NC} DISALLOW_FILE_EDIT is not set"
-            fi
-            
-            issues=$((issues+1))
+        if [ "$current_issues_count" -eq 0 ]; then
+            if ! $QUIET && [ "$ALERT_ONLY" = false ]; then echo -e "${GREEN}WordPress security checks: OK${NC}"; fi
         fi
-        
-        # Check for readme.html
-        if [ -f "$wp_path/readme.html" ]; then
-            echo "  [WARNING] readme.html exists and could reveal version information" >> "$REPORT_FILE"
-            log "WARNING" "readme.html exists and could reveal version information"
-            
-            if [ "$QUIET" = false ]; then
-                echo -e "${YELLOW}${BOLD}Warning:${NC} readme.html exists and could reveal version information"
-            fi
-            
-            issues=$((issues+1))
-        fi
-        
-        if [ "$issues" -eq 0 ]; then
-            echo "  No security issues found" >> "$REPORT_FILE"
-            log "INFO" "No WordPress security issues found"
-            
-            if [ "$QUIET" = false ] && [ "$ALERT_ONLY" = false ]; then
-                echo -e "${GREEN}No WordPress security issues found${NC}"
-            fi
-        fi
-        
-        return $issues
+        return "$current_issues_count"
     else
-        log "INFO" "Dry run: Would check WordPress security"
+        log "INFO" "[Dry Run] Would check WordPress security settings for '$wp_install_path'."
         return 0
     fi
 }
 
-# Run all checks
-issues=0
+# --- Run All Monitoring Checks ---
+total_issues_found=0 # Accumulator for issues from checks that return a count
 
-echo -e "${CYAN}${BOLD}Starting WordPress monitoring checks...${NC}"
-echo "System Information:" >> "$REPORT_FILE"
-echo "  Hostname: $(hostname)" >> "$REPORT_FILE"
-echo "  WordPress Path: $wpPath" >> "$REPORT_FILE"
-echo "  Date: $(date)" >> "$REPORT_FILE"
-echo "" >> "$REPORT_FILE"
-
-# Get WordPress URL
-if ! wp_url=$(wp option get siteurl --path="$wpPath" 2>/dev/null); then
-    wp_url="http://localhost"
-    log "WARNING" "Could not determine WordPress URL, using default: $wp_url"
-    echo "  [WARNING] Could not determine WordPress URL, using default: $wp_url" >> "$REPORT_FILE"
+if ! $QUIET; then echo -e "\n${CYAN}${BOLD}--- Starting WordPress Monitoring Checks ---${NC}"; fi
+# Initial information for the report
+if [ "$DRY_RUN" = "false" ]; then
+    echo "System Information:" >> "$REPORT_FILE"
+    echo "  Hostname: $(hostname)" >> "$REPORT_FILE"
+    echo "  Monitored WordPress Path: $wpPath" >> "$REPORT_FILE"
+    echo "  Report Timestamp: $(date)" >> "$REPORT_FILE"
+    echo "" >> "$REPORT_FILE"
 fi
 
-# System checks
-echo "System Checks:" >> "$REPORT_FILE"
-check_disk_usage "$wpPath" "$DISK_THRESHOLD" || issues=$((issues+1))
-check_cpu_usage "$CPU_THRESHOLD" || issues=$((issues+1))
-check_memory_usage "$MEMORY_THRESHOLD" || issues=$((issues+1))
-check_load_average "$LOAD_THRESHOLD" || issues=$((issues+1))
-check_connections "$CONNECTIONS_THRESHOLD" || issues=$((issues+1))
-
-echo "" >> "$REPORT_FILE"
-echo "WordPress Checks:" >> "$REPORT_FILE"
-check_response_time "$wp_url" "$RESPONSE_TIME_THRESHOLD" || issues=$((issues+1))
-check_wp_updates "$wpPath" "$PLUGIN_UPDATE_THRESHOLD" "$THEME_UPDATE_THRESHOLD" "$CORE_UPDATE_THRESHOLD" || issues=$((issues+1))
-check_wp_errors "$wpPath" "$ERROR_LOG_THRESHOLD" || issues=$((issues+1))
-check_wp_db_size "$wpPath" || issues=$((issues+1))
-check_wp_security "$wpPath" || issues=$((issues+1))
-
-# Collect metrics for CSV
-if [ "$DRY_RUN" = false ]; then
-    timestamp=$(date +"%Y-%m-%d %H:%M:%S")
-    disk_usage=$(df -h "$wpPath" | awk 'NR==2 {print $5}' | sed 's/%//')
-    cpu_usage=$(top -bn1 | grep "Cpu(s)" | awk '{print $2 + $4}')
-    memory_usage=$(free | grep Mem | awk '{print int($3/$2 * 100)}')
-    load_avg=$(uptime | awk -F'[a-z]:' '{ print $2}' | awk -F',' '{print $1}' | tr -d ' ')
-    connections=$(netstat -an | grep ESTABLISHED | wc -l)
-    response_time=$(curl -s -w "%{time_total}" -o /dev/null "$wp_url" 2>/dev/null || echo "0")
-    uptime=$(uptime -p | sed 's/up //')
-    error_count=$([ -f "$wpPath/wp-content/debug.log" ] && find "$wpPath/wp-content/debug.log" -mtime -1 -exec cat {} \; | grep -c "PHP" || echo "0")
-    plugin_updates=$(wp plugin list --update=available --format=count --path="$wpPath" 2>/dev/null || echo "0")
-    theme_updates=$(wp theme list --update=available --format=count --path="$wpPath" 2>/dev/null || echo "0")
-    core_updates=$(wp core check-update --format=count --path="$wpPath" 2>/dev/null || echo "0")
-    
-    # Write to metrics file
-    echo "$timestamp,$disk_usage,$cpu_usage,$memory_usage,$load_avg,$connections,$response_time,$uptime,$error_count,$plugin_updates,$theme_updates,$core_updates" >> "$METRICS_FILE"
-fi
-
-# Create summary
-SUMMARY_FILE=$(mktemp)
-echo "WordPress Monitoring Summary" > "$SUMMARY_FILE"
-echo "==========================" >> "$SUMMARY_FILE"
-echo "Date: $(date)" >> "$SUMMARY_FILE"
-echo "Host: $(hostname)" >> "$SUMMARY_FILE"
-echo "WordPress Path: $wpPath" >> "$SUMMARY_FILE"
-echo "WordPress URL: $wp_url" >> "$SUMMARY_FILE"
-echo "" >> "$SUMMARY_FILE"
-
-if [ "$issues" -gt 0 ]; then
-    echo "Issues Found: $issues" >> "$SUMMARY_FILE"
-    echo "" >> "$SUMMARY_FILE"
-    
-    # Extract warnings from report
-    grep -A 1 "\[WARNING\]" "$REPORT_FILE" | sed 's/--//' >> "$SUMMARY_FILE"
-    
-    # Send notification
-    notify "WARNING" "WordPress monitoring found $issues issues. See attached report for details." "WordPress Monitor" "$SUMMARY_FILE"
-    
-    echo -e "${YELLOW}${BOLD}Monitoring completed with $issues issues found.${NC}"
-    echo -e "${YELLOW}See $REPORT_FILE for details.${NC}"
-else
-    echo "No issues found. All systems normal." >> "$SUMMARY_FILE"
-    
-    # Send notification if not in alert-only mode
-    if [ "$ALERT_ONLY" = false ]; then
-        notify "SUCCESS" "WordPress monitoring completed successfully. All systems normal." "WordPress Monitor" "$SUMMARY_FILE"
+# Get WordPress site URL for response time check
+SITE_URL_FOR_CHECK="N/A"
+if [ "$DRY_RUN" = "false" ]; then
+    SITE_URL_FOR_CHECK=$(wp_cli option get siteurl --path="$wpPath" 2>/dev/null)
+    if [ -z "$SITE_URL_FOR_CHECK" ]; then
+        SITE_URL_FOR_CHECK="http://localhost" # Fallback if URL cannot be determined
+        log "WARNING" "Could not determine WordPress site URL from DB. Using default '$SITE_URL_FOR_CHECK' for response check."
+        if [ "$DRY_RUN" = "false" ]; then echo "  [WARNING] Site URL for response check defaulted to: $SITE_URL_FOR_CHECK" >> "$REPORT_FILE"; fi
+    else
+        log "INFO" "Using site URL for response check: $SITE_URL_FOR_CHECK"
     fi
+fi
+if [ "$DRY_RUN" = "false" ]; then echo "WordPress Site URL (for checks): $SITE_URL_FOR_CHECK" >> "$REPORT_FILE"; echo "" >> "$REPORT_FILE"; fi
+
+
+# --- Execute System Checks ---
+if ! $QUIET && [ "$ALERT_ONLY" = false ]; then echo -e "\n${PURPLE}Performing System Health Checks...${NC}"; fi
+if [ "$DRY_RUN" = "false" ]; then echo "System Health Checks:" >> "$REPORT_FILE"; fi
+check_disk_usage "$wpPath" "$DISK_THRESHOLD" || total_issues_found=$((total_issues_found + 1)) # Assumes wpPath is on relevant partition
+check_cpu_usage "$CPU_THRESHOLD" || total_issues_found=$((total_issues_found + 1))
+check_memory_usage "$MEMORY_THRESHOLD" || total_issues_found=$((total_issues_found + 1))
+check_load_average "$LOAD_THRESHOLD" || total_issues_found=$((total_issues_found + 1))
+check_connections "$CONNECTIONS_THRESHOLD" || total_issues_found=$((total_issues_found + 1))
+
+# --- Execute WordPress Specific Checks ---
+if ! $QUIET && [ "$ALERT_ONLY" = false ]; then echo -e "\n${PURPLE}Performing WordPress Application Checks...${NC}"; fi
+if [ "$DRY_RUN" = "false" ]; then echo "" >> "$REPORT_FILE"; echo "WordPress Application Checks:" >> "$REPORT_FILE"; fi
+check_response_time "$SITE_URL_FOR_CHECK" "$RESPONSE_TIME_THRESHOLD" || total_issues_found=$((total_issues_found + 1))
+
+updates_issues=0
+check_wp_updates "$wpPath" "$PLUGIN_UPDATE_THRESHOLD" "$THEME_UPDATE_THRESHOLD" "$CORE_UPDATE_THRESHOLD"
+updates_issues=$? # Get return value (count of update issues)
+total_issues_found=$((total_issues_found + updates_issues))
+
+check_wp_errors "$wpPath" "$ERROR_LOG_THRESHOLD" || total_issues_found=$((total_issues_found + 1))
+check_wp_db_size "$wpPath" # Informational, does not add to issues count by default
+
+security_issues=0
+check_wp_security "$wpPath"
+security_issues=$? # Get return value (count of security issues)
+total_issues_found=$((total_issues_found + security_issues))
+
+
+# --- Collect Metrics for CSV Logging ---
+if [ "$DRY_RUN" = "false" ]; then
+    log "INFO" "Collecting and writing metrics to $METRICS_FILE."
+    current_timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    # Re-fetch metrics to ensure they are current for the CSV log, some might be slightly different from checks if time passed
+    disk_usage_metric=$(df -P "$wpPath" | awk 'NR==2 {print $5}' | sed 's/%//' || echo "N/A")
+    cpu_usage_metric=$([ -n "$(command -v mpstat)" ] && mpstat 1 1 | awk '/Average:/ {print 100 - $NF}' | cut -d. -f1 || top -bn1 | grep "Cpu(s)" | head -n1 | awk '{print $2 + $4}' | cut -d. -f1 || echo "N/A")
+    memory_usage_metric=$(free | grep Mem | awk '{print int($3/$2 * 100.0)}' || echo "N/A")
+    load_avg_metric=$(uptime | awk -F'load average:' '{print $2}' | cut -d, -f1 | sed 's/ //g' || echo "N/A")
+    connections_metric=$([ -n "$(command -v netstat)" ] && netstat -ant | grep ESTABLISHED | wc -l || ([ -n "$(command -v ss)" ] && ss -nt state established | wc -l || echo "N/A"))
+    response_time_metric=$([ -n "$(command -v curl)" ] && curl -L -s -w "%{time_total}" -o /dev/null "$SITE_URL_FOR_CHECK" 2>/dev/null || echo "N/A")
+    server_uptime_metric=$(uptime -p | sed 's/up //g' || echo "N/A") # Strip "up " prefix
+    php_errors_metric=$([ -f "$wpPath/wp-content/debug.log" ] && grep -cE "PHP Fatal error:|PHP Parse error:|PHP Warning:|PHP Notice:" "$wpPath/wp-content/debug.log" || echo 0) # Total errors in log, not just recent
+    plugin_updates_metric=$(wp_cli plugin list --update=available --format=count --path="$wpPath" 2>/dev/null || echo 0)
+    theme_updates_metric=$(wp_cli theme list --update=available --format=count --path="$wpPath" 2>/dev/null || echo 0)
+    core_updates_metric=$(wp_cli core check-update --format=count --path="$wpPath" 2>/dev/null || echo 0)
     
-    echo -e "${GREEN}${BOLD}Monitoring completed successfully. No issues found.${NC}"
+    # Write collected metrics to the CSV file
+    echo "$current_timestamp,\"$wpPath\",$disk_usage_metric,$cpu_usage_metric,$memory_usage_metric,$load_avg_metric,$connections_metric,$response_time_metric,\"$server_uptime_metric\",$php_errors_metric,$plugin_updates_metric,$theme_updates_metric,$core_updates_metric" >> "$METRICS_FILE"
 fi
 
-# Calculate execution time
+# --- Create Summary and Send Notifications ---
+SUMMARY_TEMP_FILE=$(mktemp) # Temporary file for summary content
+if [ "$DRY_RUN" = "false" ]; then
+    # Populate summary file
+    echo "WordPress Monitoring Summary" > "$SUMMARY_TEMP_FILE"
+    echo "==========================" >> "$SUMMARY_TEMP_FILE"
+    echo "Date: $(date)" >> "$SUMMARY_TEMP_FILE"
+    echo "Monitored Host: $(hostname)" >> "$SUMMARY_TEMP_FILE"
+    echo "WordPress Path: $wpPath" >> "$SUMMARY_TEMP_FILE"
+    echo "Site URL: $SITE_URL_FOR_CHECK" >> "$SUMMARY_TEMP_FILE"
+    echo "" >> "$SUMMARY_TEMP_FILE"
+
+    if [ "$total_issues_found" -gt 0 ]; then
+        echo "Overall Status: ISSUES DETECTED ($total_issues_found issue(s))" >> "$SUMMARY_TEMP_FILE"
+        echo "" >> "$SUMMARY_TEMP_FILE"
+        echo "Detected Issues (see $REPORT_FILE for full details):" >> "$SUMMARY_TEMP_FILE"
+        # Extract lines containing [ALERT] from the main report file for summary
+        grep "\[ALERT\]" "$REPORT_FILE" | sed 's/^ *//' >> "$SUMMARY_TEMP_FILE"
+        
+        # Send WARNING notification with summary attached
+        log "ALERT" "WordPress monitoring found $total_issues_found issue(s). Report: $REPORT_FILE"
+        if [ "${NOTIFY_ON_ALERT:-true}" = true ]; then # Assuming NOTIFY_ON_ALERT var
+            notify "WARNING" "WordPress monitoring for ${wpHost:-$(basename "$wpPath")} found $total_issues_found issue(s). See attached report summary." "WordPress Monitor Alert" "$SUMMARY_TEMP_FILE"
+        fi
+        if ! $QUIET; then
+            echo -e "\n${YELLOW}${BOLD}--- Monitoring Completed: $total_issues_found ISSUES FOUND ---${NC}"
+            echo -e "${YELLOW}A detailed report is available at: $REPORT_FILE${NC}"
+            echo -e "${YELLOW}Metrics logged to: $METRICS_FILE${NC}"
+        fi
+    else # No issues found
+        echo "Overall Status: OK - No issues detected (all checks within thresholds)." >> "$SUMMARY_TEMP_FILE"
+        log "INFO" "WordPress monitoring completed successfully. No issues found (all checks within thresholds)."
+        # Send SUCCESS notification only if NOT in ALERT_ONLY mode
+        if [ "$ALERT_ONLY" = false ]; then
+            if [ "${NOTIFY_ON_SUCCESS:-true}" = true ]; then # Assuming NOTIFY_ON_SUCCESS var
+                 notify "SUCCESS" "WordPress monitoring for ${wpHost:-$(basename "$wpPath")} completed successfully. All systems normal." "WordPress Monitor OK" "$SUMMARY_TEMP_FILE"
+            fi
+        fi
+        if ! $QUIET; then
+            echo -e "\n${GREEN}${BOLD}--- Monitoring Completed: All Systems Normal ---${NC}"
+            echo -e "${GREEN}Full report is available at: $REPORT_FILE${NC}"
+            echo -e "${GREEN}Metrics logged to: $METRICS_FILE${NC}"
+        fi
+    fi
+else # Dry Run Summary
+    log "INFO" "[Dry Run] Monitoring simulation complete. Total potential issues if run: $total_issues_found (approx)."
+    if ! $QUIET; then
+        echo -e "\n${CYAN}${BOLD}--- Dry Run Monitoring Simulation Complete ---${NC}"
+        echo -e "${CYAN}No actual checks were performed or files written.${NC}"
+        echo -e "${CYAN}Simulated report would be at: $REPORT_FILE${NC}"
+        echo -e "${CYAN}Simulated metrics would be logged to: $METRICS_FILE${NC}"
+    fi
+fi
+
+# --- Finalization ---
 END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))
-FORMATTED_DURATION=$(format_duration $DURATION)
-log "INFO" "Monitoring process completed in ${FORMATTED_DURATION}"
-update_status "SUCCESS" "Monitoring process completed with $issues issues in ${FORMATTED_DURATION}"
+FORMATTED_DURATION=$(format_duration "$DURATION")
 
-# Clean up
-rm -f "$SUMMARY_FILE"
+log "INFO" "Monitoring process for ${wpHost:-$(basename "$wpPath")} finished in ${FORMATTED_DURATION}. Issues found: $total_issues_found."
+update_status "$([ "$total_issues_found" -gt 0 ] && echo "ALERT" || echo "SUCCESS")" "Monitoring process completed. Issues: $total_issues_found. Duration: ${FORMATTED_DURATION}."
 
-exit $issues
+
+# Clean up temporary summary file
+if [ -f "$SUMMARY_TEMP_FILE" ]; then
+    rm -f "$SUMMARY_TEMP_FILE"
+fi
+
+# Exit with number of issues found (0 for success, >0 if issues)
+# This can be used by cron or other automation to determine status.
+exit "$total_issues_found"

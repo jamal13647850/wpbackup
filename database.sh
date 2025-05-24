@@ -1,46 +1,56 @@
 #!/bin/bash
-# File: database.sh
+#
+# Script: database.sh
+# Author: Sayyed Jamal Ghasemi
+# Email: jamal13647850@gmail.com
+# LinkedIn: https://www.linkedin.com/in/jamal1364/
+# Instagram: https://www.instagram.com/jamal13647850
+# Telegram: https://t.me/jamaldev
+# Website: https://jamalghasemi.com
+# Date: 2025-05-24
+#
+# Description: Performs WordPress database backup with options for local/remote storage and custom naming.
 
 # Source common functions and variables
-. "$(dirname "$0")/common.sh" # [cite: 144]
+. "$(dirname "$0")/common.sh"
 
 # --- Script specific variables ---
-LOG_FILE="$SCRIPTPATH/logs/database.log" # [cite: 144]
-STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/database_status.log}" # [cite: 144]
+LOG_FILE="$SCRIPTPATH/logs/database.log" # Log file for this specific script
+STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/database_status.log}" # Status log for this script
 
 # --- Default values for options ---
-DRY_RUN=false # [cite: 144]
-VERBOSE=false # [cite: 144]
-QUIET=false # Added QUIET mode
-BACKUP_LOCATION="remote" # [cite: 144] Initial default, can be changed by config or CLI
-NAME_SUFFIX="" # For custom filename suffix
+DRY_RUN=false
+VERBOSE=false
+QUIET=false               # Suppress non-essential output and interactive prompts
+BACKUP_LOCATION="remote"  # Default backup location (remote, local, both)
+NAME_SUFFIX=""            # Optional custom suffix for the backup filename
 
 # Parse command line options
-while getopts "c:f:dlrbqn:v" opt; do # Added 'q' for quiet and 'n:' for name_suffix
+while getopts "c:f:dlrbqn:v" opt; do
     case $opt in
-        c) CONFIG_FILE="$OPTARG";; # [cite: 145]
-        f) OVERRIDE_FORMAT="$OPTARG";; # [cite: 145]
-        d) DRY_RUN=true;; # [cite: 145]
-        l) BACKUP_LOCATION="local";; # [cite: 145]
-        r) BACKUP_LOCATION="remote";; # [cite: 145]
-        b) BACKUP_LOCATION="both";; # [cite: 145]
-        q) QUIET=true;; # Added
-        n) NAME_SUFFIX="$OPTARG";; # Added
-        v) VERBOSE=true;; # [cite: 145]
-        \?) # [cite: 146]
-            echo -e "${RED}${BOLD}Usage:${NC} $0 -c <config_file> [-f <format>] [-d] [-l|-r|-b] [-q] [-n <suffix>] [-v]" >&2 #
-            echo -e "  -c: Configuration file (can be encrypted .conf.gpg or regular .conf)" >&2 #
-            echo -e "  -f: Override compression format (zip, tar.gz, tar)" >&2 #
-            echo -e "  -d: Dry run (no actual changes)" >&2 #
-            echo -e "  -l: Store backup locally only" >&2 # [cite: 147]
-            echo -e "  -r: Store backup remotely only" >&2 # [cite: 147]
-            echo -e "  -b: Store backup both locally and remotely" >&2 # [cite: 147]
+        c) CONFIG_FILE="$OPTARG";;
+        f) OVERRIDE_FORMAT="$OPTARG";; # Override compression format (e.g., zip, tar.gz)
+        d) DRY_RUN=true;;
+        l) BACKUP_LOCATION="local";;
+        r) BACKUP_LOCATION="remote";;
+        b) BACKUP_LOCATION="both";;
+        q) QUIET=true;;
+        n) NAME_SUFFIX="$OPTARG";;
+        v) VERBOSE=true;;
+        \?) # Handle invalid options
+            echo -e "${RED}${BOLD}Usage:${NC} $0 -c <config_file> [-f <format>] [-d] [-l|-r|-b] [-q] [-n <suffix>] [-v]" >&2
+            echo -e "  -c: Configuration file (can be .conf.gpg or .conf)" >&2
+            echo -e "  -f: Override compression format (e.g., zip, tar.gz, tar)" >&2
+            echo -e "  -d: Dry run (simulate changes, no actual backup)" >&2
+            echo -e "  -l: Store backup locally only" >&2
+            echo -e "  -r: Store backup remotely only" >&2
+            echo -e "  -b: Store backup both locally and remotely" >&2
             echo -e "  -q: Quiet mode (minimal output, suppresses interactive prompts)" >&2
             echo -e "  -n: Custom suffix for backup filename (e.g., 'db-schema-change')" >&2
-            echo -e "  -v: Verbose output" >&2 # [cite: 147]
+            echo -e "  -v: Verbose output" >&2
             exit 1
             ;;
-    esac # [cite: 148]
+    esac
 done
 
 # --- Interactive prompt for NAME_SUFFIX if not provided via -n and not in QUIET mode ---
@@ -48,211 +58,248 @@ if [ -z "$NAME_SUFFIX" ] && [ "${QUIET}" = false ]; then
     echo -e "${YELLOW}Do you want to add a custom suffix to the database backup filename? (y/N):${NC}"
     read -r -p "> " confirm_suffix
     if [[ "$confirm_suffix" =~ ^[Yy]$ ]]; then
-        echo -e "${YELLOW}Enter custom suffix:${NC}"
+        echo -e "${YELLOW}Enter custom suffix (e.g., 'critical-update-prep'):${NC}"
         read -r -p "> " interactive_suffix
         if [ -n "$interactive_suffix" ]; then
-            NAME_SUFFIX=$(sanitize_filename_suffix "$interactive_suffix") # Uses function from common.sh
+            NAME_SUFFIX=$(sanitize_filename_suffix "$interactive_suffix") # Sanitize input using common.sh function
             if [ -n "$NAME_SUFFIX" ]; then
                  echo -e "${GREEN}Using sanitized suffix: '${NAME_SUFFIX}'${NC}"
             else
-                 echo -e "${YELLOW}No valid suffix provided or suffix became empty after sanitization. Proceeding without a custom suffix.${NC}"
+                 echo -e "${YELLOW}No valid suffix derived after sanitization. Proceeding without a custom suffix.${NC}"
             fi
         else
             echo -e "${YELLOW}No suffix entered. Proceeding without a custom suffix.${NC}"
         fi
     else
-        # User chose not to add a suffix interactively
-        if ! $QUIET; then # Only print if not in quiet mode
-             echo -e "${INFO}Proceeding without a custom suffix.${NC}" # Using INFO color from common.sh potentially
+        if ! $QUIET; then # Only print if not quiet
+             echo -e "${INFO}Proceeding without a custom suffix.${NC}" # INFO color from common.sh
         fi
     fi
 elif [ -n "$NAME_SUFFIX" ]; then
-    # Sanitize suffix if provided via -n
+    # Sanitize suffix if provided via -n argument
     ORIGINAL_CMD_SUFFIX="$NAME_SUFFIX"
-    NAME_SUFFIX=$(sanitize_filename_suffix "$NAME_SUFFIX") # Uses function from common.sh
-    if [ -z "$NAME_SUFFIX" ] && [ -n "$ORIGINAL_CMD_SUFFIX" ]; then # If suffix became empty
-         echo -e "${YELLOW}Warning: Provided suffix '${ORIGINAL_CMD_SUFFIX}' was invalid or became empty after sanitization. Proceeding without a custom suffix.${NC}"
-    elif [ "$NAME_SUFFIX" != "$ORIGINAL_CMD_SUFFIX" ] && [ -n "$NAME_SUFFIX" ]; then # If suffix changed and is not empty
+    NAME_SUFFIX=$(sanitize_filename_suffix "$NAME_SUFFIX")
+    if [ -z "$NAME_SUFFIX" ] && [ -n "$ORIGINAL_CMD_SUFFIX" ]; then
+         if ! $QUIET; then echo -e "${YELLOW}Warning: Provided suffix '${ORIGINAL_CMD_SUFFIX}' was invalid or became empty after sanitization. Proceeding without a custom suffix.${NC}"; fi
+         log "WARNING" "Provided suffix '${ORIGINAL_CMD_SUFFIX}' sanitized to empty. No suffix will be used."
+    elif [ "$NAME_SUFFIX" != "$ORIGINAL_CMD_SUFFIX" ] && [ -n "$NAME_SUFFIX" ] && ! $QUIET; then
         echo -e "${YELLOW}Sanitized command-line suffix: '${ORIGINAL_CMD_SUFFIX}' -> '${NAME_SUFFIX}'${NC}"
     fi
 fi
 
-# Initialize log (after QUIET is potentially set and suffix handled)
-init_log "WordPress Database Backup" # [cite: 148]
+# Initialize log (after QUIET and NAME_SUFFIX are potentially set)
+init_log "WordPress Database Backup"
 
 # --- Configuration file processing ---
-if [ -z "$CONFIG_FILE" ]; then # [cite: 148]
-    echo -e "${YELLOW}${BOLD}No configuration file specified.${NC}" # [cite: 148]
-    if ! select_config_file "$SCRIPTPATH/configs" "database"; then # [cite: 149]
-        echo -e "${RED}${BOLD}Error: Configuration file selection failed!${NC}" >&2 # [cite: 149]
+if [ -z "$CONFIG_FILE" ]; then
+    if ! $QUIET; then echo -e "${YELLOW}${BOLD}No configuration file specified.${NC}"; fi
+    if ! select_config_file "$SCRIPTPATH/configs" "database backup"; then # Interactive selection
+        log "ERROR" "Configuration file selection failed or was cancelled."
         exit 1
     fi
-elif [ ! -f "$CONFIG_FILE" ]; then # [cite: 150]
-    echo -e "${RED}${BOLD}Error: Configuration file $CONFIG_FILE not found!${NC}" >&2 # [cite: 150]
+# Ensure specified config file exists if provided directly
+elif [ ! -f "$CONFIG_FILE" ]; then
+    log "ERROR" "Configuration file '$CONFIG_FILE' not found."
     exit 1
-fi # [cite: 150]
-# process_config_file function will be called from common.sh and handles its own messages
-process_config_file "$CONFIG_FILE" "Database Backup" # (Similar logic)
+fi
+process_config_file "$CONFIG_FILE" "Database Backup" # Load and source the config
 
-# Validate required configuration variables
-for var in wpPath; do # [cite: 154]
-    if [ -z "${!var}" ]; then # [cite: 154]
-        echo -e "${RED}${BOLD}Error: Required variable $var is not set in $CONFIG_FILE!${NC}" >&2 # [cite: 154]
+# Validate required configuration variables from config file
+for var in wpPath; do # Essential for wp-cli
+    if [ -z "${!var}" ]; then
+        log "ERROR" "Required variable '$var' is not set in configuration file '$CONFIG_FILE'."
         exit 1
     fi
 done
 
-# Check SSH settings if remote backup is enabled
-if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then # [cite: 155]
-    for var in destinationPort destinationUser destinationIP destinationDbBackupPath privateKeyPath; do # [cite: 155]
-        if [ -z "${!var}" ]; then # [cite: 156]
-            echo -e "${RED}${BOLD}Error: Required SSH variable $var for remote backup is not set in $CONFIG_FILE!${NC}" >&2 # [cite: 157]
+# Check SSH settings if remote backup location is selected
+if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then
+    for var in destinationPort destinationUser destinationIP destinationDbBackupPath privateKeyPath; do
+        if [ -z "${!var}" ]; then
+            log "ERROR" "Required SSH variable '$var' for remote backup is not set in '$CONFIG_FILE'."
             exit 1
         fi
     done
 fi
 
 # --- Define backup directories and final filenames ---
-DIR="${DIR:-$(date +%Y%m%d-%H%M%S)}" # [cite: 157] (DIR from common.sh, or overridden by config)
-BACKUP_DIR="${BACKUP_DIR:-$SCRIPTPATH/backups}" # [cite: 157]
-LOCAL_BACKUP_DIR="${LOCAL_BACKUP_DIR:-$SCRIPTPATH/local_backups}" # [cite: 157]
-DEST="$BACKUP_DIR/$DIR" # [cite: 157]
-DB_FILE_PREFIX="${DB_FILE_PREFIX:-DB}" # [cite: 157]
-COMPRESSION_FORMAT="${OVERRIDE_FORMAT:-${COMPRESSION_FORMAT:-zip}}" # [cite: 157]
-NICE_LEVEL="${NICE_LEVEL:-19}" # [cite: 157]
-LOG_LEVEL="${VERBOSE:+verbose}" # [cite: 157]
-LOG_LEVEL="${LOG_LEVEL:-normal}" # [cite: 157]
+# DIR is typically set by common.sh (current timestamp), or can be overridden by config
+BACKUP_DIR_STAGING="${BACKUP_DIR_STAGING:-$SCRIPTPATH/backups}" # Main staging area for temp files
+LOCAL_BACKUP_DIR_FINAL="${LOCAL_BACKUP_DIR_FINAL:-$SCRIPTPATH/local_backups}" # Final local storage path
 
-FORMATTED_SUFFIX=""
+DEST_TEMP="$BACKUP_DIR_STAGING/$DIR" # Temporary directory for this specific backup instance
+
+DB_FILE_PREFIX="${DB_FILE_PREFIX:-DB}" # From config or default
+COMPRESSION_FORMAT="${OVERRIDE_FORMAT:-${COMPRESSION_FORMAT:-tar.gz}}" # CLI > Config > Default (tar.gz for DB)
+NICE_LEVEL="${NICE_LEVEL:-19}"       # CPU niceness for operations
+LOG_LEVEL="${VERBOSE:+verbose}"      # Set by common.sh based on -v
+LOG_LEVEL="${LOG_LEVEL:-normal}"     # Default if not verbose
+
+FORMATTED_SUFFIX="" # Prepare suffix part for the filename
 if [ -n "$NAME_SUFFIX" ]; then
     FORMATTED_SUFFIX="-${NAME_SUFFIX}"
 fi
-DB_FILENAME="${DB_FILE_PREFIX}-${DIR}${FORMATTED_SUFFIX}.${COMPRESSION_FORMAT}" # [cite: 157] (Modified)
+DB_FILENAME="${DB_FILE_PREFIX}-${DIR}${FORMATTED_SUFFIX}.${COMPRESSION_FORMAT}"
 
-# Cleanup function trap
+# --- Cleanup Function Trap ---
+# Ensures temporary directory ($DEST_TEMP) is removed on script exit or interruption
 cleanup_database() {
-    cleanup "Database backup process" "Database backup" #
-    rm -rf "$DEST" #
+    log "INFO" "Database backup process ended. Cleaning up temporary directory: $DEST_TEMP ..."
+    if [ -d "$DEST_TEMP" ]; then
+        rm -rf "$DEST_TEMP"
+        log "INFO" "Temporary directory $DEST_TEMP removed."
+    fi
+    # update_status is handled by the calling script or final status update
 }
-trap cleanup_database INT TERM #
+trap cleanup_database EXIT INT TERM # Use EXIT trap for robust cleanup
 
 # --- Main Backup Logic ---
 if ! $QUIET; then
-    echo -e "${CYAN}Starting database backup...${NC}"
-    echo -e "${INFO}Backup location: ${BOLD}$BACKUP_LOCATION${NC}"
+    echo -e "${CYAN}Starting database backup for '${wpHost:-$(basename "$wpPath")}'...${NC}"
+    echo -e "${INFO}Backup Target Location: ${BOLD}$BACKUP_LOCATION${NC}"
     if [ -n "$FORMATTED_SUFFIX" ]; then
-        echo -e "${INFO}Filename suffix: ${BOLD}${NAME_SUFFIX}${NC}"
+        echo -e "${INFO}Filename Suffix: ${BOLD}${NAME_SUFFIX}${NC}"
     fi
+    echo -e "${INFO}Final Filename (approx): ${BOLD}${DB_FILENAME}${NC}"
 fi
 
-log "INFO" "Starting database backup for $DIR to $BACKUP_LOCATION (Suffix: $NAME_SUFFIX)" # [cite: 159]
-update_status "STARTED" "Database backup process for $DIR to $BACKUP_LOCATION" # [cite: 159]
+log "INFO" "Starting database backup (Instance: $DIR, Target: $BACKUP_LOCATION, Suffix: '$NAME_SUFFIX')"
+update_status "STARTED" "Database backup process for ${wpHost:-$DIR} to $BACKUP_LOCATION"
 
-# Validate SSH if needed
-if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then # [cite: 160]
-    validate_ssh "$destinationUser" "$destinationIP" "$destinationPort" "$privateKeyPath" "Database backup" # Similar to [cite: 158, 159] but using common.sh
-    log "INFO" "SSH connection successfully validated" # [cite: 160]
+# Validate SSH connection if remote backup is involved
+if [ "$BACKUP_LOCATION" = "remote" ] || [ "$BACKUP_LOCATION" = "both" ]; then
+    validate_ssh "$destinationUser" "$destinationIP" "$destinationPort" "$privateKeyPath" "Database Backup SSH Check"
+    # validate_ssh from common.sh handles check_status and logging internally
+    log "INFO" "SSH connection to $destinationUser@$destinationIP:$destinationPort validated successfully."
 fi
 
-# Create directories
-if [ "$DRY_RUN" = false ]; then # [cite: 161]
-    mkdir -pv "$BACKUP_DIR" # [cite: 161]
-    check_status $? "Create backup directory" "Database backup" # [cite: 162]
-    mkdir -pv "$DEST" # [cite: 162]
-    check_status $? "Create destination directory" "Database backup" # [cite: 163]
-    if [ "$BACKUP_LOCATION" = "local" ] || [ "$BACKUP_LOCATION" = "both" ]; then # [cite: 163]
-        mkdir -pv "$LOCAL_BACKUP_DIR" # [cite: 164]
-        check_status $? "Create local backups directory" "Database backup" # [cite: 165]
+# Create necessary directories if not in dry run mode
+if [ "$DRY_RUN" = false ]; then
+    log "INFO" "Creating directories: Staging='$BACKUP_DIR_STAGING', InstanceTemp='$DEST_TEMP'."
+    mkdir -pv "$BACKUP_DIR_STAGING" # Main parent staging directory
+    check_status $? "Create main backup staging directory '$BACKUP_DIR_STAGING'" "Database Backup"
+    mkdir -pv "$DEST_TEMP"          # Specific temporary directory for this backup instance
+    check_status $? "Create instance temporary directory '$DEST_TEMP'" "Database Backup"
+    
+    if [ "$BACKUP_LOCATION" = "local" ] || [ "$BACKUP_LOCATION" = "both" ]; then
+        mkdir -pv "$LOCAL_BACKUP_DIR_FINAL" # Final local storage directory
+        check_status $? "Create final local backup directory '$LOCAL_BACKUP_DIR_FINAL'" "Database Backup"
     fi
 else
-    log "INFO" "Dry-run mode enabled: skipping directory creation" # [cite: 165]
+    log "INFO" "[Dry Run] Skipping directory creation."
 fi
 
-# Perform backup
-DB_SIZE_VALUE="N/A"
-if [ "$DRY_RUN" = false ]; then # [cite: 166]
-    mkdir -pv "$DEST/DB" # [cite: 166]
-    check_status $? "Create DB directory" "Database backup" # [cite: 167]
-    cd "$DEST/DB" || exit 1 # [cite: 167]
-
-    if ! $QUIET; then echo -e "${CYAN}${BOLD}Exporting database...${NC}"; fi # [cite: 168]
-    wp_cli db export --add-drop-table --path="$wpPath" # [cite: 168]
-    check_status $? "Export database" "Database backup" # [cite: 169]
-
-    cd "$DEST" || exit 1 # [cite: 169]
-    log "DEBUG" "Starting database compression" # [cite: 170]
-    if ! $QUIET; then echo -e "${CYAN}${BOLD}Compressing database...${NC}"; fi # [cite: 170]
-    compress "DB/" "$DB_FILENAME" # [cite: 170]
-    check_status $? "Compress database files" "Database backup" # [cite: 171]
-
-    if ! $QUIET; then echo -e "${CYAN}${BOLD}Cleaning up temporary DB directory...${NC}"; fi # [cite: 171]
-    nice -n "$NICE_LEVEL" rm -rfv DB/ # [cite: 171]
-    check_status $? "Clean up DB directory" "Database backup" # [cite: 172]
-
-    if [ -f "$DEST/$DB_FILENAME" ]; then # Check if file exists before getting size
-        DB_SIZE_VALUE=$(du -h "$DEST/$DB_FILENAME" | cut -f1) # [cite: 172]
+# --- Perform Database Backup ---
+DB_SIZE_HR="N/A (Dry Run)"
+if [ "$DRY_RUN" = false ]; then
+    DB_DUMP_DIR="$DEST_TEMP/DB_DUMP" # Subdirectory within instance temp for the raw SQL dump
+    mkdir -pv "$DB_DUMP_DIR"
+    check_status $? "Create raw DB dump subdirectory '$DB_DUMP_DIR'" "Database Backup"
+    
+    SQL_FILE_NAME="database-${DIR}.sql" # Name of the raw SQL file
+    
+    if ! $QUIET; then echo -e "${CYAN}${BOLD}Exporting database from WordPress path: $wpPath...${NC}"; fi
+    # Using wp_cli wrapper from common.sh which handles nice level
+    wp_cli db export "$DB_DUMP_DIR/$SQL_FILE_NAME" --add-drop-table --path="$wpPath"
+    check_status $? "Export database using wp-cli to '$DB_DUMP_DIR/$SQL_FILE_NAME'" "Database Backup"
+    
+    if [ ! -s "$DB_DUMP_DIR/$SQL_FILE_NAME" ]; then # Check if SQL file is not empty
+        log "ERROR" "Database export file '$DB_DUMP_DIR/$SQL_FILE_NAME' is empty or not created. Aborting."
+        exit 1
     fi
-    log "INFO" "Database backup created: $DEST/$DB_FILENAME (Size: $DB_SIZE_VALUE)" # [cite: 172]
 
+    if ! $QUIET; then echo -e "${CYAN}${BOLD}Compressing database dump...${NC}"; fi
+    # Compress the DUMP subdirectory into the $DEST_TEMP directory with the final $DB_FILENAME
+    compress "$DB_DUMP_DIR" "$DEST_TEMP/$DB_FILENAME" # compress function from common.sh
+    check_status $? "Compress database dump '$DB_DUMP_DIR' to '$DEST_TEMP/$DB_FILENAME'" "Database Backup"
+
+    if ! $QUIET; then echo -e "${CYAN}${BOLD}Cleaning up raw database dump directory...${NC}"; fi
+    rm -rf "$DB_DUMP_DIR" # Remove the uncompressed dump directory
+    check_status $? "Clean up raw DB dump directory '$DB_DUMP_DIR'" "Database Backup"
+
+    if [ -f "$DEST_TEMP/$DB_FILENAME" ]; then
+        DB_SIZE_BYTES=$(du -b "$DEST_TEMP/$DB_FILENAME" | cut -f1)
+        DB_SIZE_HR=$(human_readable_size "$DB_SIZE_BYTES")
+        log "INFO" "Database backup created and compressed: $DEST_TEMP/$DB_FILENAME (Size: $DB_SIZE_HR)"
+    else
+        log "ERROR" "Compressed database backup file '$DEST_TEMP/$DB_FILENAME' not found. Aborting."
+        DB_SIZE_HR="Error"
+        exit 1
+    fi
+
+    # --- Handle Backup Location ---
     case $BACKUP_LOCATION in
-        local) # [cite: 172]
-            log "INFO" "Saving backup locally to $LOCAL_BACKUP_DIR" # [cite: 172]
-            if ! $QUIET; then echo -e "${CYAN}${BOLD}Moving database backup to local storage...${NC}"; fi # [cite: 172]
-            mv -v "$DEST/$DB_FILENAME" "$LOCAL_BACKUP_DIR/" # [cite: 172]
-            check_status $? "Move database backup to local backup directory" "Database backup" # [cite: 173]
-            rm -rf "$DEST" # Clean up the timestamped backup dir
+        local)
+            log "INFO" "Moving backup to final local storage: $LOCAL_BACKUP_DIR_FINAL/$DB_FILENAME"
+            if ! $QUIET; then echo -e "${CYAN}${BOLD}Moving database backup to local storage: $LOCAL_BACKUP_DIR_FINAL ...${NC}"; fi
+            mv -v "$DEST_TEMP/$DB_FILENAME" "$LOCAL_BACKUP_DIR_FINAL/"
+            check_status $? "Move database backup to final local directory" "Database Backup"
+            # DEST_TEMP will be cleaned by the EXIT trap
             ;;
-        remote) # [cite: 174]
-            log "INFO" "Uploading backup to remote server" # [cite: 174]
-            if ! $QUIET; then echo -e "${CYAN}${BOLD}Uploading database backup to remote server...${NC}"; fi # [cite: 174]
-            nice -n "$NICE_LEVEL" rsync -azvrh --progress --compress-level=9 "$DEST/$DB_FILENAME" \
-                -e "ssh -p ${destinationPort:-22} -i ${privateKeyPath}" \
-                "$destinationUser@$destinationIP:$destinationDbBackupPath" # [cite: 174]
-            check_status $? "Upload database backup to remote server" "Database backup" # [cite: 175]
-            rm -rf "$DEST" # Clean up after remote transfer
+        remote)
+            log "INFO" "Uploading backup to remote server: $destinationUser@$destinationIP:$destinationDbBackupPath"
+            if ! $QUIET; then echo -e "${CYAN}${BOLD}Uploading database backup to remote server...${NC}"; fi
+            # Using rsync for remote transfer; common.sh does not have a generic 'transfer' function
+            nice -n "$NICE_LEVEL" rsync -az --info=progress2 --remove-source-files \
+                -e "ssh -p ${destinationPort:-22} -i \"${privateKeyPath}\"" \
+                "$DEST_TEMP/$DB_FILENAME" \
+                "$destinationUser@$destinationIP:$destinationDbBackupPath/"
+            check_status $? "Upload database backup to remote server and remove source" "Database Backup"
+            # --remove-source-files in rsync will delete $DEST_TEMP/$DB_FILENAME after successful transfer.
+            # The $DEST_TEMP directory itself will be cleaned by the EXIT trap.
             ;;
-        both) # [cite: 176]
-            log "INFO" "Saving backup locally and uploading to remote server" # [cite: 176]
-            if ! $QUIET; then echo -e "${CYAN}${BOLD}Copying database backup to local storage...${NC}"; fi # [cite: 176]
-            cp -v "$DEST/$DB_FILENAME" "$LOCAL_BACKUP_DIR/" # [cite: 176]
-            check_status $? "Copy database backup to local" "Database backup" # [cite: 177]
+        both)
+            log "INFO" "Copying backup to local storage and uploading to remote server."
+            if ! $QUIET; then echo -e "${CYAN}${BOLD}Copying database backup to local storage: $LOCAL_BACKUP_DIR_FINAL ...${NC}"; fi
+            cp -v "$DEST_TEMP/$DB_FILENAME" "$LOCAL_BACKUP_DIR_FINAL/"
+            check_status $? "Copy database backup to final local directory" "Database Backup"
 
-            if ! $QUIET; then echo -e "${CYAN}${BOLD}Uploading database backup to remote server...${NC}"; fi # [cite: 177]
-            nice -n "$NICE_LEVEL" rsync -azvrh --progress --compress-level=9 "$DEST/$DB_FILENAME" \
-                -e "ssh -p ${destinationPort:-22} -i ${privateKeyPath}" \
-                "$destinationUser@$destinationIP:$destinationDbBackupPath" # [cite: 177]
-            check_status $? "Upload database backup to remote server" "Database backup" # [cite: 178]
-            rm -rf "$DEST" # Clean up DEST as its now in local_backups and remote
+            if ! $QUIET; then echo -e "${CYAN}${BOLD}Uploading database backup to remote server...${NC}"; fi
+            nice -n "$NICE_LEVEL" rsync -az --info=progress2 \
+                -e "ssh -p ${destinationPort:-22} -i \"${privateKeyPath}\"" \
+                "$DEST_TEMP/$DB_FILENAME" \
+                "$destinationUser@$destinationIP:$destinationDbBackupPath/"
+            check_status $? "Upload database backup to remote server" "Database Backup"
+            # $DEST_TEMP/$DB_FILENAME remains for now, $DEST_TEMP dir cleaned by EXIT trap.
             ;;
-    esac # [cite: 179]
+    esac
 else
-    log "INFO" "Dry-run mode enabled: skipping database backup execution" # [cite: 179]
+    log "INFO" "[Dry Run] Skipping actual database backup, compression, and transfer."
+    if ! $QUIET; then echo -e "${YELLOW}[Dry Run] Would export, compress, and store database backup named (approx) '${DB_FILENAME}'.${NC}"; fi
 fi
 
 # --- Finalization ---
-END_TIME=$(date +%s) #
-DURATION=$((END_TIME - START_TIME)) #
-FORMATTED_DURATION=$(format_duration $DURATION) #
-log "INFO" "Database backup process for $DIR successfully completed to $BACKUP_LOCATION in ${FORMATTED_DURATION}" #
-update_status "SUCCESS" "Database backup process for $DIR to $BACKUP_LOCATION completed in ${FORMATTED_DURATION}" #
-notify "SUCCESS" "Database backup process for $DIR successfully completed to $BACKUP_LOCATION in ${FORMATTED_DURATION}" "Database backup" #
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME)) # START_TIME from common.sh
+FORMATTED_DURATION=$(format_duration "$DURATION") # format_duration from common.sh
+
+log "INFO" "Database backup process for ${wpHost:-$DIR} completed. Target: $BACKUP_LOCATION. Duration: ${FORMATTED_DURATION}."
+update_status "SUCCESS" "Database backup for ${wpHost:-$DIR} to $BACKUP_LOCATION completed in ${FORMATTED_DURATION}."
+# Send notification if configured (NOTIFY_ON_SUCCESS should be from common.sh or config)
+if [ "${NOTIFY_ON_SUCCESS:-true}" = true ] && [ "$DRY_RUN" = false ]; then
+    notify "SUCCESS" "Database backup for ${wpHost:-$(basename "$wpPath")} (Suffix: '$NAME_SUFFIX', Instance: $DIR) completed to $BACKUP_LOCATION in ${FORMATTED_DURATION}. File: $DB_FILENAME, Size: $DB_SIZE_HR." "Database Backup"
+fi
 
 if ! $QUIET; then
-    echo -e "${GREEN}${BOLD}Database backup completed successfully!${NC}" #
-    echo -e "${GREEN}Backup location: ${NC}${BOLD}${BACKUP_LOCATION}${NC}" #
+    echo -e "\n${GREEN}${BOLD}Database backup process completed successfully!${NC}"
+    echo -e "${GREEN}Target Location(s): ${NC}${BOLD}${BACKUP_LOCATION}${NC}"
     if [ -n "$FORMATTED_SUFFIX" ]; then
-        echo -e "${GREEN}Custom suffix: ${NC}${BOLD}${NAME_SUFFIX}${NC}"
+        echo -e "${GREEN}Custom Suffix Used: ${NC}${BOLD}${NAME_SUFFIX}${NC}"
     fi
-    echo -e "${GREEN}Time taken: ${NC}${BOLD}${FORMATTED_DURATION}${NC}" #
-    FINAL_DB_PATH_INFO=""
+    echo -e "${GREEN}Time Taken:         ${NC}${BOLD}${FORMATTED_DURATION}${NC}"
+    
+    FINAL_DB_PATH_DISPLAY="N/A"
     if [ "$DRY_RUN" = false ]; then
         case "$BACKUP_LOCATION" in
-            "local") FINAL_DB_PATH_INFO="$LOCAL_BACKUP_DIR/$DB_FILENAME";;
-            "remote") FINAL_DB_PATH_INFO="$destinationUser@$destinationIP:$destinationDbBackupPath/$DB_FILENAME";;
-            "both") FINAL_DB_PATH_INFO="$LOCAL_BACKUP_DIR/$DB_FILENAME and remote";;
+            "local") FINAL_DB_PATH_DISPLAY="$LOCAL_BACKUP_DIR_FINAL/$DB_FILENAME";;
+            "remote") FINAL_DB_PATH_DISPLAY="$destinationUser@$destinationIP:$destinationDbBackupPath/$DB_FILENAME";;
+            "both") FINAL_DB_PATH_DISPLAY="$LOCAL_BACKUP_DIR_FINAL/$DB_FILENAME (and remote at $destinationUser@$destinationIP:$destinationDbBackupPath/$DB_FILENAME)";;
         esac
-        echo -e "${GREEN}Database backup: ${NC}$FINAL_DB_PATH_INFO (${DB_SIZE_VALUE:-N/A})" # Use DB_SIZE_VALUE
+        echo -e "${GREEN}Backup File:        ${NC}${FINAL_DB_PATH_DISPLAY} (${DB_SIZE_HR})"
     else
-        echo -e "${GREEN}Filename (dry run): ${NC}${DB_FILENAME}"
+        echo -e "${YELLOW}Dry Run - Filename would be (approx): ${NC}${DB_FILENAME}"
     fi
 fi
+
+# The EXIT trap (cleanup_database) will handle removal of $DEST_TEMP
+exit 0
