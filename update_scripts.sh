@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Script: update_scripts.sh
-# Author: Sayyed Jamal Ghasemi (Further modified by Bash Script Developer AI)
+# Author: Sayyed Jamal Ghasemi
 # Date: 2025-05-27
 #
 # Description: Updates the script suite from a GitHub repository.
