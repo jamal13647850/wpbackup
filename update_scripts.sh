@@ -1,12 +1,7 @@
 #!/bin/bash
 #
 # Script: update_scripts.sh
-# Author: Sayyed Jamal Ghasemi
-# Email: jamal13647850@gmail.com
-# LinkedIn: https://www.linkedin.com/in/jamal1364/
-# Instagram: https://www.instagram.com/jamal13647850
-# Telegram: https://t.me/jamaldev
-# Website: https://jamalghasemi.com
+# Author: Sayyed Jamal Ghasemi (Further modified by Bash Script Developer AI)
 # Date: 2025-05-27
 #
 # Description: Updates the script suite from a GitHub repository.
@@ -28,12 +23,11 @@ STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/update_scripts_status.log}"
 # --- Configuration - Based on User Feedback ---
 DEFAULT_GIT_REPO_URL="https://github.com/jamal13647850/wpbackup"
 DEFAULT_GIT_BRANCH="main"
-DEFAULT_TARGET_DIR="$SCRIPTPATH" # Update the directory where common.sh resides
+DEFAULT_TARGET_DIR="$SCRIPTPATH" 
 
 # --- Default values for options ---
 VERBOSE=false
 QUIET=false
-# "Overwrite" policy is now the default behavior.
 
 # Function to display help message
 display_help() {
@@ -70,15 +64,11 @@ while getopts "t:r:b:qvh" opt; do
     esac
 done
 
-# Initialize log for this script
 init_log "Scripts Updater"
 
-# Adjust LOG_LEVEL based on QUIET/VERBOSE flags after sourcing common.sh
 if [ "$QUIET" = true ]; then export LOG_LEVEL="quiet"; fi
 if [ "$VERBOSE" = true ]; then export LOG_LEVEL="verbose"; fi
 
-
-# --- Initial System Checks ---
 if ! command_exists git; then
     log "ERROR" "Git command ('git') not found. Please install Git."
     update_status "FAILURE" "Git command not found"
@@ -86,7 +76,6 @@ if ! command_exists git; then
     exit 1
 fi
 
-# Resolve EFFECTIVE_TARGET_DIR to an absolute path
 TARGET_DIR_ABS=""
 if [ ! -d "$EFFECTIVE_TARGET_DIR" ]; then
     log "INFO" "Target directory '$EFFECTIVE_TARGET_DIR' does not exist. Attempting to create it."
@@ -118,16 +107,14 @@ if ! $QUIET; then
 fi
 update_status "STARTED" "Updating from $EFFECTIVE_REPO_URL branch $EFFECTIVE_BRANCH to $TARGET_DIR_ABS"
 
-# --- Git Update Logic ---
 if [ -d "$TARGET_DIR_ABS/.git" ]; then
-    # --- Target is an existing Git repository ---
-    log "INFO" "Target directory '$TARGET_DIR_ABS' is a Git repository. Proceeding with fetch and reset."
-    if ! $QUIET; then echo -e "${CYAN}Updating existing Git repository...${NC}"; fi
+    log "INFO" "Target directory '$TARGET_DIR_ABS' is a Git repository. Proceeding with overwrite."
+    if ! $QUIET; then echo -e "${CYAN}Updating existing Git repository (forcing overwrite)...${NC}"; fi
 
     cd "$TARGET_DIR_ABS" || {
         log "ERROR" "Could not change directory to '$TARGET_DIR_ABS'."
         update_status "FAILURE" "Cannot cd to $TARGET_DIR_ABS"
-        exit 1 # Critical error
+        exit 1 
     }
 
     current_origin_url=$(git config --get remote.origin.url)
@@ -141,18 +128,30 @@ if [ -d "$TARGET_DIR_ABS/.git" ]; then
     git fetch origin --prune
     check_status $? "Git fetch origin --prune" "Scripts Updater"
     
-    log "INFO" "Checking out branch '$EFFECTIVE_BRANCH' and resetting to 'origin/$EFFECTIVE_BRANCH'."
-    git checkout -B "$EFFECTIVE_BRANCH" "origin/$EFFECTIVE_BRANCH"
-    check_status $? "Git checkout -B $EFFECTIVE_BRANCH origin/$EFFECTIVE_BRANCH" "Scripts Updater"
+    log "INFO" "Attempting to switch to branch '$EFFECTIVE_BRANCH'."
+    git checkout "$EFFECTIVE_BRANCH" 2>/dev/null
+    # If checkout failed or was already on branch, reset --hard will align it with origin's version.
     
-    log "INFO" "Local branch '$EFFECTIVE_BRANCH' is now aligned with 'origin/$EFFECTIVE_BRANCH'."
+    log "INFO" "Resetting local branch '$EFFECTIVE_BRANCH' to match 'origin/$EFFECTIVE_BRANCH' (discards local changes to tracked files)."
+    git reset --hard "origin/$EFFECTIVE_BRANCH"
+    check_status $? "Git reset --hard origin/$EFFECTIVE_BRANCH" "Scripts Updater"
+    
+    log "INFO" "Cleaning untracked files and directories, excluding important local directories."
+    git clean -fdx \
+        -e logs/ \
+        -e configs/ \
+        -e local_backups/ \
+        -e backups/
+        # Add other exclusions if needed, e.g. -e '.idea/'
+    check_status $? "Git clean -fdx (with exclusions)" "Scripts Updater"
+
+    log "INFO" "Local branch '$EFFECTIVE_BRANCH' is now aligned with 'origin/$EFFECTIVE_BRANCH' and working directory is updated, preserving important local directories."
 
 else
-    # --- Target is NOT a Git repository (or for initial setup) ---
     log "INFO" "Target directory '$TARGET_DIR_ABS' is not a Git repository. Full overwrite from clone, preserving specified local directories."
     if ! $QUIET; then echo -e "${CYAN}Target is not a Git repo. Performing full overwrite (specified local directories preserved)...${NC}"; fi
 
-    PRESERVE_ITEMS=("logs" "configs" "local_backups" "backups") # Updated list of items to preserve
+    PRESERVE_ITEMS=("logs" "configs" "local_backups" "backups") 
     PRESERVED_DATA_BACKUP_PATH=""
     PRESERVED_DATA_BACKUP_PATH=$(mktemp -d "$SCRIPTPATH/wpb_preserve_XXXXXX")
 
@@ -166,7 +165,9 @@ else
     for item_to_preserve in "${PRESERVE_ITEMS[@]}"; do
         if [ -e "$TARGET_DIR_ABS/$item_to_preserve" ]; then
             log "INFO" "Backing up '$TARGET_DIR_ABS/$item_to_preserve' to '$PRESERVED_DATA_BACKUP_PATH/'"
+            # Create the specific subdirectory in the backup path before copying
             mkdir -p "$PRESERVED_DATA_BACKUP_PATH/$item_to_preserve" && \
+            # Copy contents of the item. Using `/.` ensures that if item_to_preserve is a directory, its contents are copied.
             cp -a "$TARGET_DIR_ABS/$item_to_preserve/." "$PRESERVED_DATA_BACKUP_PATH/$item_to_preserve/" &>/dev/null
             if [ $? -ne 0 ]; then
                 log "WARNING" "Failed to fully back up '$TARGET_DIR_ABS/$item_to_preserve'. Some preserved files might be lost."
@@ -186,15 +187,22 @@ else
         log "INFO" "Clone successful. Syncing files to '$TARGET_DIR_ABS'."
         if ! $QUIET; then echo -e "${CYAN}Syncing cloned files to target directory...${NC}"; fi
         
-        rsync -a --delete --exclude='.gitkeep' "$NEW_CLONE_PATH/" "$TARGET_DIR_ABS/" # Example --exclude, adjust if needed
+        # Rsync all content from the new clone to the target directory.
+        # --delete ensures that files in TARGET_DIR_ABS not present in NEW_CLONE_PATH are removed.
+        # Exclude .gitkeep or other placeholder files if they exist in the repo and are not meant for the final dir.
+        rsync -a --delete --exclude='.gitkeep' "$NEW_CLONE_PATH/" "$TARGET_DIR_ABS/" 
         RSYNC_STATUS=$?
         
         if [ $RSYNC_STATUS -eq 0 ]; then
             log "INFO" "Initial rsync successful. Restoring preserved items."
+            # Restore preserved items. This will overwrite any files from the repo
+            # that might have the same names as preserved items (e.g., a default config in repo).
             for item_to_preserve in "${PRESERVE_ITEMS[@]}"; do
-                if [ -d "$PRESERVED_DATA_BACKUP_PATH/$item_to_preserve" ]; then
+                if [ -d "$PRESERVED_DATA_BACKUP_PATH/$item_to_preserve" ]; then # Check if backup was made and is a directory
                     log "INFO" "Restoring '$item_to_preserve' from backup to '$TARGET_DIR_ABS/'."
+                    # Ensure target sub-directory exists before copying contents
                     mkdir -p "$TARGET_DIR_ABS/$item_to_preserve" && \
+                    # Use rsync for restore as well, it's robust. Source path needs `/.`
                     rsync -a "$PRESERVED_DATA_BACKUP_PATH/$item_to_preserve/." "$TARGET_DIR_ABS/$item_to_preserve/"
                     if [ $? -ne 0 ]; then
                         log "WARNING" "Failed to fully restore '$item_to_preserve'. Check '$TARGET_DIR_ABS/$item_to_preserve'."
@@ -211,9 +219,11 @@ else
         update_status "FAILURE" "Git clone failed"
     fi
 
+    # Clean up temporary clone and backup directories
     if [ -d "$NEW_CLONE_PATH" ]; then rm -rf "$NEW_CLONE_PATH"; fi
     if [ -d "$PRESERVED_DATA_BACKUP_PATH" ]; then rm -rf "$PRESERVED_DATA_BACKUP_PATH"; fi
     
+    # If clone or rsync failed, the update is considered failed.
     if [ $CLONE_STATUS -ne 0 ] || { [ $CLONE_STATUS -eq 0 ] && [ "${RSYNC_STATUS:-1}" -ne 0 ]; }; then
         log "ERROR" "Update process failed due to clone or rsync errors."
         [ "${NOTIFY:-true}" == true ] && notify "FAILURE" "Update of scripts in '$TARGET_DIR_ABS' failed (clone/rsync error)." "Scripts Updater"
@@ -227,7 +237,7 @@ if [ -d "$TARGET_DIR_ABS/.git" ]; then
     CURRENT_COMMIT_HASH=$(cd "$TARGET_DIR_ABS" && git rev-parse --short HEAD 2>/dev/null || echo "N/A")
 else
     # This case should ideally not be reached if clone was successful, as .git would then exist.
-    CURRENT_COMMIT_HASH="N/A (clone might have failed or dir is not a git repo)"
+    CURRENT_COMMIT_HASH="N/A (clone may have failed or dir not a git repo post-operation)"
 fi
 
 log "INFO" "Successfully updated scripts in '$TARGET_DIR_ABS' to branch '$EFFECTIVE_BRANCH' (Commit: $CURRENT_COMMIT_HASH)."
@@ -235,7 +245,7 @@ update_status "SUCCESS" "Scripts updated to $EFFECTIVE_BRANCH (Commit: $CURRENT_
 
 if ! $QUIET; then
     echo -e "${GREEN}${BOLD}Scripts updated successfully to branch '$EFFECTIVE_BRANCH'!${NC}"
-    if [[ "$CURRENT_COMMIT_HASH" != "N/A"* ]]; then
+    if [[ "$CURRENT_COMMIT_HASH" != "N/A"* ]]; then # Check if not starting with "N/A"
         echo -e "${GREEN}Current version:${NC}"
         (cd "$TARGET_DIR_ABS" && git log -1 --pretty=format:"  %h - %s (%an, %ar)")
     fi
