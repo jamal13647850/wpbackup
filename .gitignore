@@ -1,3 +1,8 @@
 *.json
 *.md
 *.txt
+
+logs
+config
+backups
+local_backups
