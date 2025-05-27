@@ -11,6 +11,8 @@
 #
 # Description: Common functions and variables for backup and restore scripts.
 
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games:/opt/bin:/snap/bin:$PATH"
+
 SCRIPTPATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # Absolute path to the script directory
 START_TIME=$(date +%s) # Script execution start time
 DIR=$(date +%Y%m%d-%H%M%S) # Current timestamp for directory/file naming
