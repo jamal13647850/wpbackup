@@ -1,5 +1,6 @@
 #!/bin/bash
-#
+
+################################################################################
 # Script: remove_old.sh
 # Author: Sayyed Jamal Ghasemi
 # Email: jamal13647850@gmail.com
@@ -9,182 +10,85 @@
 # Website: https://jamalghasemi.com
 # Date: 2025-05-24
 #
-# Description: Removes old backup files and logs based on retention duration,
-#              available disk space, or a combination of both criteria.
-#              Includes safety checks for paths and uses a lock file.
+# Description:
+#   This script removes old backup files and logs based on retention duration,
+#   available disk space, or a combination of these criteria.
+#   It includes safety checks for paths, uses a lock file to prevent concurrent runs,
+#   and supports dry run and verbose modes.
+#
+# Usage:
+#   remove_old.sh -c <config_file> [-d] [-v] [--help|-h]
+#
+# Command line options:
+#   -c <config_file>  : Path to the configuration file (required).
+#   -d                : Dry run mode (simulate deletions).
+#   -v                : Verbose output.
+#   --help, -h        : Show help message and exit.
+#
+################################################################################
 
-# Source common functions and variables
+# Load common functions and variables
 . "$(dirname "$0")/common.sh"
 
-# --- Script Constants and Configuration ---
-# Define paths considered safe for automated deletion operations.
-SAFE_PATHS=("/var/backups" "/home/backup" "$SCRIPTPATH/backups" "$SCRIPTPATH/local_backups") # Added local_backups
-# Define common archive extensions to look for.
+# --- Constants and Configuration ----------------------------------------------
+
+# Directories allowed for deletion operations (safety list)
+SAFE_PATHS=(
+    "/var/backups"
+    "/home/backup"
+    "$SCRIPTPATH/backups"
+    "$SCRIPTPATH/local_backups"
+)
+
+# Archive file extensions to target
 ARCHIVE_EXTS=("zip" "tar" "tar.gz" "tgz" "gz" "bz2" "xz" "7z")
 
+# Log files and sizes
 LOG_FILE="$SCRIPTPATH/logs/remove_old.log"
 STATUS_LOG="${STATUS_LOG:-$SCRIPTPATH/logs/remove_old_status.log}"
-MAX_LOG_SIZE=$((200 * 1024 * 1024)) # 200MB max size for old log files before considering deletion (if also old)
+MAX_LOG_SIZE=$((200 * 1024 * 1024)) # 200MB
 
+# Defaults for options
 DRY_RUN=false
 VERBOSE=false
 
-# --- Configuration fields (to be set by the .conf file) ---
-# DISK_FREE_ENABLE: "y" or "n" - whether to consider disk free space for cleanup.
-# DISK_MIN_FREE_GB: integer - minimum free disk space in GB to maintain (if DISK_FREE_ENABLE is "y").
-# CLEANUP_MODE: "time" | "space" | "both"
-#   "time": Delete files older than BACKUP_RETAIN_DURATION.
-#   "space": Delete oldest files until DISK_MIN_FREE_GB is met (ignores retention duration).
-#   "both": Delete files older than BACKUP_RETAIN_DURATION *only if* free space is below DISK_MIN_FREE_GB.
-# fullPath: The directory path to clean up.
-# BACKUP_RETAIN_DURATION: Number of days to retain files.
-DISK_FREE_ENABLE="n"    # Default value, to be overridden by config
-DISK_MIN_FREE_GB=0      # Default value, to be overridden by config
-CLEANUP_MODE="time"     # Default value, to be overridden by config
+# Configuration variables (will be overridden by config file)
+DISK_FREE_ENABLE="n"
+DISK_MIN_FREE_GB=0
+CLEANUP_MODE="time"
 
-# --- Show usage/help function ---
+# --- Functions ----------------------------------------------------------------
+
+## Show usage/help message and exit
 usage() {
     echo -e "${GREEN}${BOLD}Professional WordPress Backup Old Files Remover${NC}"
     echo -e "Removes old backup files by time, disk space, or both criteria."
     echo -e "\n${GREEN}Usage: $0 -c <config_file> [-d] [-v] [--help|-h]${NC}"
     echo -e "  -c <config_file>     Path to the configuration file (required)."
-    echo -e "  -d                   Dry run mode (simulates deletions, no actual files removed)."
-    echo -e "  -v                   Verbose output (more detailed console messages)."
+    echo -e "  -d                   Dry run mode (simulates deletions)."
+    echo -e "  -v                   Verbose output (detailed console messages)."
     echo -e "  --help, -h           Show this help message and exit."
     exit 0
 }
 
-# --- Parse command line options ---
-# This script uses a custom loop for parsing, allowing GNU-style --help.
-while [[ "$#" -gt 0 ]]; do
-    case "$1" in
-        -c) CONFIG_FILE="$2"; shift 2 ;; # Config file path
-        -d) DRY_RUN=true; shift ;;       # Dry run flag
-        -v) VERBOSE=true; shift ;;       # Verbose flag
-        --help|-h) usage ;;              # Display help
-        *) echo -e "${RED}Unknown option: $1${NC}"; usage ;; # Unknown option
-    esac
-done
-
-# --- Load and Validate Configuration ---
-if [ -z "$CONFIG_FILE" ]; then
-    log "ERROR" "Configuration file not specified. Use -c <config_file>."
-    # usage function called by the parser for unknown/missing mandatory options.
-    exit 1
-elif [ ! -f "$CONFIG_FILE" ]; then
-    log "ERROR" "Configuration file '$CONFIG_FILE' not found."
-    exit 1
-else
-    # Source the configuration file. Variables within will be set in this script's scope.
-    . "$CONFIG_FILE"
-    log "INFO" "Successfully loaded configuration from '$CONFIG_FILE'."
-fi
-
-# Set defaults for new configuration options if they were not in the loaded config file.
-DISK_FREE_ENABLE="${DISK_FREE_ENABLE:-n}"
-DISK_MIN_FREE_GB="${DISK_MIN_FREE_GB:-0}"
-CLEANUP_MODE="${CLEANUP_MODE:-time}" # Valid modes: time, space, both
-
-# Validate essential variables from the config file.
-REQUIRED_CONFIG_VARS=("fullPath" "BACKUP_RETAIN_DURATION")
-for var_name in "${REQUIRED_CONFIG_VARS[@]}"; do
-    if [ -z "${!var_name}" ]; then # Indirect variable expansion to check value
-        log "ERROR" "Required variable '$var_name' is not set in '$CONFIG_FILE'."
-        exit 1
-    fi
-done
-
-# Security check: Ensure fullPath is within one of the predefined safe parent directories.
-FOUND_SAFE_PATH=0
-for safe_dir_pattern in "${SAFE_PATHS[@]}"; do
-    # Check if fullPath starts with one of the safe_dir_patterns
-    if [[ "$fullPath" == "$safe_dir_pattern"* ]]; then
-        FOUND_SAFE_PATH=1
-        break
-    fi
-done
-if [ "$FOUND_SAFE_PATH" -ne 1 ]; then
-    log "ERROR" "The target path '$fullPath' is not within the allowed safe paths defined in SAFE_PATHS. Aborting for safety."
-    exit 2 # Exit with a specific code for path safety failure.
-fi
-log "INFO" "Target path '$fullPath' is within allowed safe paths."
-
-# Set operational variables (LOG_LEVEL from common.sh based on -v)
-NICE_LEVEL="${NICE_LEVEL:-19}" # Default niceness for commands
-LOG_LEVEL="${VERBOSE:+verbose}"
-LOG_LEVEL="${LOG_LEVEL:-normal}" # Default log level
-
-# --- Lock File Implementation ---
-# Prevents multiple instances of this script from running simultaneously on the same target.
-LOCK_FILE="/var/lock/remove_old_$(echo "$fullPath" | md5sum | cut -d' ' -f1).lock" # Unique lock per path
-exec 9>"$LOCK_FILE" || { log "ERROR" "Could not open lockfile '$LOCK_FILE'. Check permissions or if path is valid."; exit 10; }
-# Attempt to acquire an exclusive, non-blocking lock.
-if ! flock -n 9; then
-    log "WARNING" "Another instance of remove_old.sh is already running for path '$fullPath' (Lock: '$LOCK_FILE'). Exiting."
-    # Close file descriptor 9 before exiting
-    exec 9>&-
-    exit 7 # Exit code 7 indicates another instance is running.
-fi
-# If lock acquired, it will be released automatically when fd 9 is closed (on script exit).
-
-# --- Cleanup Function for Trap ---
-cleanup_remove_script() {
-    # Call common cleanup if it performs generic tasks useful here
-    cleanup "Old backups removal process (invoked by trap)" "Remove Old Script Cleanup"
-    log "INFO" "Old backups removal script finished or was interrupted."
-    # Release the lock file by closing the file descriptor
-    exec 9>&-
-    log "DEBUG" "Lock file '$LOCK_FILE' released."
-}
-trap cleanup_remove_script EXIT INT TERM # Ensure lock release and cleanup on exit/interrupt
-
-# --- Helper Function: Get Free Disk Space ---
-# Returns free disk space in Gibibytes (GB) for the filesystem of fullPath.
+## Retrieve free disk space in GiB for the filesystem of $fullPath
+## Returns integer value of free space in GiB
 get_disk_free_gb() {
     local free_space_gb
-    # df -BG: output in Gibibytes. --output=avail: show only available. tail -1: skip header. tr: remove non-digits.
     free_space_gb=$(df -BG --output=avail "$fullPath" 2>/dev/null | tail -n 1 | tr -dc '0-9')
     if [ -z "$free_space_gb" ]; then
-        log "WARNING" "Could not determine free disk space for '$fullPath'. Assuming 0 GB free for safety in 'space' mode."
-        echo "0" # Default to 0 if df fails, to be conservative in space checks
+        log "WARNING" "Could not determine free disk space for '$fullPath'. Assuming 0 GB free."
+        echo "0"
     else
         echo "$free_space_gb"
     fi
 }
 
-# --- Main Process Start ---
-init_log "Old Backups/Logs Remover" # Initialize logging for this script
-
-log "INFO" "Starting removal of old archive/log files in '$fullPath'."
-log "INFO" "Cleanup Mode: '$CLEANUP_MODE'. Retention: '$BACKUP_RETAIN_DURATION' days. Disk Min Free: '$DISK_MIN_FREE_GB' GB (Enabled: $DISK_FREE_ENABLE)."
-update_status "STARTED" "Removal of old backups/logs in '$fullPath'"
-
-# Build the part of the find command for matching archive extensions.
-# Results in: -iname '*.zip' -o -iname '*.tar' -o ...
-archive_find_pattern_parts=""
-for ext_item in "${ARCHIVE_EXTS[@]}"; do
-    archive_find_pattern_parts+="-o -iname \"*.$ext_item\" "
-done
-archive_find_pattern_parts="${archive_find_pattern_parts:3}" # Remove leading " -o "
-
-# Construct find commands. Using eval later to handle the dynamic pattern.
-# For archives: find files older than BACKUP_RETAIN_DURATION days.
-FIND_CMD_ARCHIVES="find \"$fullPath\" -type f \( $archive_find_pattern_parts \) -mtime +$BACKUP_RETAIN_DURATION"
-# For logs: find .log files older than BACKUP_RETAIN_DURATION AND larger than MAX_LOG_SIZE.
-FIND_CMD_LOGS="find \"$fullPath\" -type f -iname '*.log' -mtime +$BACKUP_RETAIN_DURATION -size +${MAX_LOG_SIZE}c"
-
-
-total_archives_deleted_count=0
-total_logs_deleted_count=0
-total_archives_size_freed=0
-total_logs_size_freed=0
-candidate_archives_list=() # Array to store archive file paths found by find
-candidate_logs_list=()   # Array to store log file paths found by find
-
-# --- Core Deletion Logic Function ---
-# Decides if a file should be deleted based on the selected CLEANUP_MODE.
-# Args: $1 (file_path)
-# Returns: 0 if file should be deleted, 1 otherwise.
+## Determine if a file should be deleted based on CLEANUP_MODE and disk space
+## Args:
+##   $1 - Path of the file to check
+## Returns:
+##   0 if the file should be deleted, 1 otherwise
 should_delete_file() {
     local current_file_path="$1"
     local current_file_age_days
@@ -192,196 +96,335 @@ should_delete_file() {
 
     case "$CLEANUP_MODE" in
         "time")
-            # For 'time' mode, the find command already filtered by age.
-            # So, any file passed here (if from that find) meets the age criteria.
-            log "DEBUG" "Mode 'time': File '$current_file_path' is old enough (selected by find)."
-            return 0 # Delete based on age
+            # Files are already filtered by age in find command
+            log "DEBUG" "Mode 'time': File '$current_file_path' selected for deletion."
+            return 0
             ;;
         "space")
-            # For 'space' mode, delete oldest files until DISK_MIN_FREE_GB is met.
-            # Age is not a primary filter here, only order of deletion.
-            if [ "$DISK_FREE_ENABLE" != "y" ]; then return 1; fi # Only act if disk free check is enabled
+            if [ "$DISK_FREE_ENABLE" != "y" ]; then
+                return 1
+            fi
             current_disk_free_gb=$(get_disk_free_gb)
             if (( current_disk_free_gb < DISK_MIN_FREE_GB )); then
-                log "DEBUG" "Mode 'space': Disk free ($current_disk_free_gb GB) < min ($DISK_MIN_FREE_GB GB). File '$current_file_path' candidate for deletion."
-                return 0 # Delete to free space
+                log "DEBUG" "Mode 'space': Disk free ($current_disk_free_gb GB) < min ($DISK_MIN_FREE_GB GB); deleting file '$current_file_path'."
+                return 0
             else
-                log "DEBUG" "Mode 'space': Disk free ($current_disk_free_gb GB) >= min ($DISK_MIN_FREE_GB GB). Stopping deletions for now."
-                return 1 # Enough space, stop deleting
+                log "DEBUG" "Mode 'space': Disk free ($current_disk_free_gb GB) >= min ($DISK_MIN_FREE_GB GB); stop deletions."
+                return 1
             fi
             ;;
         "both")
-            # For 'both' mode, file must be older than retention AND disk space must be below threshold.
-            if [ "$DISK_FREE_ENABLE" != "y" ]; then return 1; fi # Only act if disk free check is enabled
+            if [ "$DISK_FREE_ENABLE" != "y" ]; then
+                return 1
+            fi
+            # Calculate file age in days
             current_file_age_days=$(( ( $(date +%s) - $(stat -c %Y "$current_file_path" 2>/dev/null || echo 0) ) / 86400 ))
             if (( current_file_age_days >= BACKUP_RETAIN_DURATION )); then
                 current_disk_free_gb=$(get_disk_free_gb)
                 if (( current_disk_free_gb < DISK_MIN_FREE_GB )); then
-                    log "DEBUG" "Mode 'both': File '$current_file_path' is old enough AND disk free ($current_disk_free_gb GB) < min ($DISK_MIN_FREE_GB GB)."
-                    return 0 # Old enough AND need space
+                    log "DEBUG" "Mode 'both': File '$current_file_path' is old and disk free ($current_disk_free_gb GB) < minimum."
+                    return 0
                 else
-                    log "DEBUG" "Mode 'both': File '$current_file_path' is old, but disk free ($current_disk_free_gb GB) >= min ($DISK_MIN_FREE_GB GB). Keeping."
-                    return 1 # Old but enough space
+                    log "DEBUG" "Mode 'both': File '$current_file_path' is old but disk free ($current_disk_free_gb GB) sufficient; keeping."
+                    return 1
                 fi
             else
-                log "DEBUG" "Mode 'both': File '$current_file_path' is not old enough ($current_file_age_days days). Keeping."
-                return 1 # Not old enough
+                log "DEBUG" "Mode 'both': File '$current_file_path' is not old enough ($current_file_age_days days); keeping."
+                return 1
             fi
             ;;
-        *) # Unknown mode
-            log "WARNING" "Unknown CLEANUP_MODE: '$CLEANUP_MODE'. No files will be deleted by should_delete_file."
+        *)
+            log "WARNING" "Unknown CLEANUP_MODE: '$CLEANUP_MODE'. No deletions performed."
             return 1
             ;;
     esac
-    return 1 # Default: do not delete
+    return 1
 }
 
-# --- Function to Process and Remove Files ---
-# Iterates a list of files, checks deletion criteria, and removes them.
-# Args: Files array passed by expansion ("${array[@]}")
-# Output (via echo for read): count_deleted total_size_deleted
+## Remove files from given list based on deletion criteria
+## Args:
+##   List of file paths as positional parameters
+## Outputs:
+##   echo "<number_of_deleted_files> <total_size_freed_in_bytes>"
 remove_files_based_on_criteria() {
-    local files_to_process_array=("${@}") # Capture all arguments into an array
-    local deleted_count_for_type=0
-    local total_size_freed_for_type=0
-    local current_file_to_remove
+    local files_to_process_array=("${@}")
+    local deleted_count=0
+    local total_size_freed=0
+    local current_file
     local file_size_bytes
 
-    # For 'space' or 'both' (when space matters), sort files by modification time (oldest first)
-    # to ensure oldest are removed first when trying to meet space criteria.
-    if [[ "$CLEANUP_MODE" == "space" ]] || [[ "$CLEANUP_MODE" == "both" && "$DISK_FREE_ENABLE" == "y" ]]; then
-        log "INFO" "Sorting files by age (oldest first) for '$CLEANUP_MODE' mode."
-        # Create a temporary array of "timestamp filepath" then sort, then extract filepath
+    # For 'space' or 'both' with disk enabled, sort files by oldest first for deletion
+    if [[ "$CLEANUP_MODE" == "space" ]] || { [[ "$CLEANUP_MODE" == "both" ]] && [[ "$DISK_FREE_ENABLE" == "y" ]]; }; then
+        log "INFO" "Sorting files by oldest modification time for deletion mode '$CLEANUP_MODE'."
         local temp_sortable_array=()
-        for f_path in "${files_to_process_array[@]}"; do
-            if [ -f "$f_path" ]; then # Ensure file exists before stat
-                temp_sortable_array+=("$(stat -c "%Y %n" "$f_path" 2>/dev/null)")
+        for current_file in "${files_to_process_array[@]}"; do
+            if [ -f "$current_file" ]; then
+                local timestamp
+                timestamp=$(stat -c "%Y" "$current_file" 2>/dev/null)
+                if [ -n "$timestamp" ]; then
+                    temp_sortable_array+=("$timestamp $current_file")
+                fi
             fi
         done
-        # Sort numerically on first field (timestamp), then map back to file paths
-        # Ensure IFS handles newlines correctly when reading from sorted list.
-        # Using process substitution with `mapfile` (or `readarray`) is safer for filenames with spaces.
-        mapfile -t files_to_process_array < <(printf '%s\n' "${temp_sortable_array[@]}" | sort -n -k1,1 | awk '{$1=""; print $0}' | sed 's/^ //')
+        # Sort by timestamp asc and extract filenames
+        mapfile -t files_to_process_array < <(printf '%s\n' "${temp_sortable_array[@]}" | sort -n -k1,1 | cut -d' ' -f2-)
     fi
 
-    for current_file_to_remove in "${files_to_process_array[@]}"; do
-        if [ ! -f "$current_file_to_remove" ]; then # File might have been deleted by another process or previous step
-            log "DEBUG" "File '$current_file_to_remove' not found during processing loop. Skipping."
+    for current_file in "${files_to_process_array[@]}"; do
+        if [ ! -f "$current_file" ]; then
+            log "DEBUG" "File '$current_file' no longer exists; skipping."
             continue
         fi
 
-        if should_delete_file "$current_file_to_remove"; then
-            file_size_bytes=$(stat -c %s "$current_file_to_remove" 2>/dev/null)
-            [ -z "$file_size_bytes" ] && file_size_bytes=0 # Default to 0 if stat fails
+        if should_delete_file "$current_file"; then
+            file_size_bytes=$(stat -c %s "$current_file" 2>/dev/null)
+            file_size_bytes=${file_size_bytes:-0}
 
             if [ "$DRY_RUN" = false ]; then
-                log "INFO" "Removing '$current_file_to_remove' (Size: $(human_readable_size "$file_size_bytes")). Mode: '$CLEANUP_MODE'."
-                if ! $QUIET; then echo -e "${RED}Removing: $current_file_to_remove ($(human_readable_size "$file_size_bytes"))${NC}"; fi
-                rm -f -- "$current_file_to_remove" # -- to handle filenames starting with -
+                log "INFO" "Deleting file '$current_file' (Size: $(human_readable_size "$file_size_bytes")). Mode: $CLEANUP_MODE"
+                if ! $QUIET; then
+                    echo -e "${RED}Removing: $current_file ($(human_readable_size "$file_size_bytes"))${NC}"
+                fi
+                rm -f -- "$current_file"
                 if [ $? -ne 0 ]; then
-                    log "ERROR" "Failed to remove file '$current_file_to_remove'."
-                    continue # Skip to next file if removal failed
+                    log "ERROR" "Failed to remove file '$current_file'."
+                    continue
                 fi
             else
-                log "INFO" "[Dry Run] Would remove '$current_file_to_remove' (Size: $(human_readable_size "$file_size_bytes")). Mode: '$CLEANUP_MODE'."
-                if ! $QUIET; then echo -e "${YELLOW}[Dry Run] Would remove: $current_file_to_remove ($(human_readable_size "$file_size_bytes"))${NC}"; fi
+                log "INFO" "[Dry Run] Would delete '$current_file' (Size: $(human_readable_size "$file_size_bytes")). Mode: $CLEANUP_MODE"
+                if ! $QUIET; then
+                    echo -e "${YELLOW}[Dry Run] Would remove: $current_file ($(human_readable_size "$file_size_bytes"))${NC}"
+                fi
             fi
-            deleted_count_for_type=$((deleted_count_for_type + 1))
-            total_size_freed_for_type=$((total_size_freed_for_type + file_size_bytes))
 
-            # For 'space' mode, re-check disk space after each deletion and stop if target met.
-            # For 'both' mode, this check is inside should_delete_file for each file.
-            if [[ "$CLEANUP_MODE" == "space" && "$DISK_FREE_ENABLE" == "y" ]]; then
+            ((deleted_count++))
+            ((total_size_freed += file_size_bytes))
+
+            # In space mode, check if target disk free achieved after each deletion
+            if [[ "$CLEANUP_MODE" == "space" ]] && [[ "$DISK_FREE_ENABLE" == "y" ]]; then
                 local current_disk_free_gb_after_del
                 current_disk_free_gb_after_del=$(get_disk_free_gb)
                 if (( current_disk_free_gb_after_del >= DISK_MIN_FREE_GB )); then
-                    log "INFO" "Target disk free space ($DISK_MIN_FREE_GB GB) reached. Stopping further deletions in 'space' mode."
-                    break # Stop deleting more files for this type
+                    log "INFO" "Disk free target reached (${DISK_MIN_FREE_GB}GB). Stopping deletions."
+                    break
                 fi
             fi
         fi
     done
-    # Output counts for this type of file (archives or logs)
-    echo "$deleted_count_for_type $total_size_freed_for_type"
+
+    echo "$deleted_count $total_size_freed"
 }
 
-# --- Record disk free space before any cleanup ---
+# --- Parse Command Line Arguments ---------------------------------------------
+
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+        -c) CONFIG_FILE="$2"; shift 2 ;;
+        -d) DRY_RUN=true; shift ;;
+        -v) VERBOSE=true; shift ;;
+        --help|-h) usage ;;
+        *)
+            echo -e "${RED}Unknown option: $1${NC}"
+            usage ;;
+    esac
+done
+
+# --- Load and Validate Configuration ------------------------------------------
+
+if [ -z "$CONFIG_FILE" ]; then
+    log "ERROR" "Configuration file not specified. Use -c <config_file>."
+    exit 1
+elif [ ! -f "$CONFIG_FILE" ]; then
+    log "ERROR" "Configuration file '$CONFIG_FILE' not found."
+    exit 1
+else
+    . "$CONFIG_FILE"
+    log "INFO" "Loaded configuration from '$CONFIG_FILE'."
+
+    # Convert SAFE_PATHS from comma-separated string to array if needed
+    if [[ "$SAFE_PATHS" == *,* ]]; then
+        IFS=',' read -ra SAFE_PATHS <<< "$SAFE_PATHS"
+        log "INFO" "Converted SAFE_PATHS string to array with ${#SAFE_PATHS[@]} elements."
+    fi
+fi
+
+# Ensure config variables have defaults if unset
+DISK_FREE_ENABLE="${DISK_FREE_ENABLE:-n}"
+DISK_MIN_FREE_GB="${DISK_MIN_FREE_GB:-0}"
+CLEANUP_MODE="${CLEANUP_MODE:-time}"
+
+# Verify required variables from config
+REQUIRED_CONFIG_VARS=("fullPath" "BACKUP_RETAIN_DURATION")
+for var in "${REQUIRED_CONFIG_VARS[@]}"; do
+    if [ -z "${!var}" ]; then
+        log "ERROR" "Required variable '$var' not set in configuration."
+        exit 1
+    fi
+done
+
+# Validate that fullPath is within safe directories
+FOUND_SAFE_PATH=0
+for safe_dir in "${SAFE_PATHS[@]}"; do
+    if [[ "$fullPath" == "$safe_dir"* ]]; then
+        FOUND_SAFE_PATH=1
+        break
+    fi
+done
+if [ "$FOUND_SAFE_PATH" -ne 1 ]; then
+    log "ERROR" "Target path '$fullPath' is not within allowed safe paths. Aborting."
+    exit 2
+fi
+log "INFO" "Target path '$fullPath' verified within allowed safe paths."
+
+# --- Setup Logging and Locking -----------------------------------------------
+
+NICE_LEVEL="${NICE_LEVEL:-19}"
+LOG_LEVEL="${VERBOSE:+verbose}"
+LOG_LEVEL="${LOG_LEVEL:-normal}"
+
+LOCK_FILE="/var/lock/remove_old_$(echo "$fullPath" | md5sum | cut -d' ' -f1).lock"
+exec 9>"$LOCK_FILE" || { log "ERROR" "Cannot open lockfile '$LOCK_FILE'. Check permissions."; exit 10; }
+
+if ! flock -n 9; then
+    log "WARNING" "Another instance is running for path '$fullPath'. Exiting."
+    exec 9>&-
+    exit 7
+fi
+# Lock released on script exit by trap
+
+# --- Cleanup Trap Handler ----------------------------------------------------
+
+cleanup_remove_script() {
+    cleanup "Old backups removal process (trap cleanup)" "Remove Old Script Cleanup"
+    log "INFO" "Old backup removal script finished or interrupted."
+    exec 9>&-
+    log "DEBUG" "Lock file '$LOCK_FILE' released."
+}
+trap cleanup_remove_script EXIT INT TERM
+
+# --- Main Script Execution ---------------------------------------------------
+
+init_log "Old Backups/Logs Remover"
+
+log "INFO" "Starting old file removal in '$fullPath'."
+log "INFO" "Mode: $CLEANUP_MODE; Retain days: $BACKUP_RETAIN_DURATION; Disk min free: $DISK_MIN_FREE_GB GB (Enabled: $DISK_FREE_ENABLE)."
+update_status "STARTED" "Removal of old backups/logs in '$fullPath'"
+
+# Prepare find command patterns for archives
+archive_find_pattern_parts=""
+for ext in "${ARCHIVE_EXTS[@]}"; do
+    archive_find_pattern_parts+="-o -iname \"*.$ext\" "
+done
+archive_find_pattern_parts="${archive_find_pattern_parts:3}" # Remove leading -o
+
+if [[ "$CLEANUP_MODE" == "space" ]]; then
+    FIND_CMD_ARCHIVES="find \"$fullPath\" -type f \( $archive_find_pattern_parts \)"
+    FIND_CMD_LOGS="find \"$fullPath\" -type f -iname '*.log' -size +${MAX_LOG_SIZE}c"
+else
+    FIND_CMD_ARCHIVES="find \"$fullPath\" -type f \( $archive_find_pattern_parts \) -mtime +$BACKUP_RETAIN_DURATION"
+    FIND_CMD_LOGS="find \"$fullPath\" -type f -iname '*.log' -mtime +$BACKUP_RETAIN_DURATION -size +${MAX_LOG_SIZE}c"
+fi
+
+total_archives_deleted_count=0
+total_logs_deleted_count=0
+total_archives_size_freed=0
+total_logs_size_freed=0
+candidate_archives_list=()
+candidate_logs_list=()
+
+# Record disk space before cleanup
 DISK_SPACE_BEFORE_GB=$(get_disk_free_gb)
 log "INFO" "Disk space before cleanup: ${DISK_SPACE_BEFORE_GB} GB."
 
-# --- Process Archive Files ---
-# Populate candidate_archives_list using the FIND_CMD_ARCHIVES
-# Need to handle filenames with spaces correctly when reading from find.
-# Using process substitution and mapfile (bash v4+) or a while read loop.
+# Find archive files matching criteria
 mapfile -t candidate_archives_list < <(eval "$FIND_CMD_ARCHIVES" 2>/dev/null)
 
 if [ "${#candidate_archives_list[@]}" -gt 0 ]; then
-    log "INFO" "Found ${#candidate_archives_list[@]} archive files older than $BACKUP_RETAIN_DURATION days (initial candidates)."
-    # `read var1 var2 < <(command)` is a way to capture multiple outputs from a function/command.
-    read -r total_archives_deleted_count total_archives_size_freed < <(remove_files_based_on_criteria "${candidate_archives_list[@]}")
-    log "INFO" "Processed archive files. Deleted: $total_archives_deleted_count, Size Freed: $(human_readable_size "$total_archives_size_freed")."
+    log "INFO" "Found ${#candidate_archives_list[@]} archive files (candidates)."
+
+    # Remove archive files based on criteria
+    output_from_archive_func=$(remove_files_based_on_criteria "${candidate_archives_list[@]}")
+    last_line_archives=$(echo "$output_from_archive_func" | tail -n 1)
+
+    if [[ "$last_line_archives" =~ ^[0-9]+[[:space:]]+[0-9]+$ ]]; then
+        read -r total_archives_deleted_count total_archives_size_freed <<< "$last_line_archives"
+    else
+        log "ERROR" "Failed to parse output from archive deletion. Output: $output_from_archive_func"
+        total_archives_deleted_count=0
+        total_archives_size_freed=0
+    fi
+
+    log "INFO" "Archives processed. Deleted: $total_archives_deleted_count, Size freed: $(human_readable_size "$total_archives_size_freed")."
 else
-    log "INFO" "No archive files found older than $BACKUP_RETAIN_DURATION days."
+    log "INFO" "No archive files found."
 fi
 
-# --- Process Log Files ---
-# Populate candidate_logs_list (only if CLEANUP_MODE is 'time' or 'both' as age is a factor for logs)
-# For 'space' only mode, log files typically aren't the primary target unless explicitly included or they are very old.
-# The current FIND_CMD_LOGS includes age. If space mode should ignore age for logs, FIND_CMD_LOGS needs adjustment.
-# Assuming current logic: logs are only deleted if old AND large.
+# Process log files if applicable
 if [[ "$CLEANUP_MODE" == "time" || "$CLEANUP_MODE" == "both" ]]; then
     mapfile -t candidate_logs_list < <(eval "$FIND_CMD_LOGS" 2>/dev/null)
     if [ "${#candidate_logs_list[@]}" -gt 0 ]; then
-        log "INFO" "Found ${#candidate_logs_list[@]} log files older than $BACKUP_RETAIN_DURATION days AND larger than $(human_readable_size "$MAX_LOG_SIZE") (initial candidates)."
-        read -r total_logs_deleted_count total_logs_size_freed < <(remove_files_based_on_criteria "${candidate_logs_list[@]}")
-        log "INFO" "Processed log files. Deleted: $total_logs_deleted_count, Size Freed: $(human_readable_size "$total_logs_size_freed")."
+        log "INFO" "Found ${#candidate_logs_list[@]} log files older than $BACKUP_RETAIN_DURATION days and larger than $(human_readable_size "$MAX_LOG_SIZE")."
+        
+        output_from_log_func=$(remove_files_based_on_criteria "${candidate_logs_list[@]}")
+        last_line_logs=$(echo "$output_from_log_func" | tail -n 1)
+
+        if [[ "$last_line_logs" =~ ^[0-9]+[[:space:]]+[0-9]+$ ]]; then
+            read -r total_logs_deleted_count total_logs_size_freed <<< "$last_line_logs"
+        else
+            log "ERROR" "Failed to parse output from log deletion. Output: $output_from_log_func"
+            total_logs_deleted_count=0
+            total_logs_size_freed=0
+        fi
+
+        log "INFO" "Logs processed. Deleted: $total_logs_deleted_count, Size freed: $(human_readable_size "$total_logs_size_freed")."
     else
-        log "INFO" "No large, old log files found matching criteria."
+        log "INFO" "No large, old log files found."
     fi
 else
-    log "INFO" "Log file cleanup skipped for CLEANUP_MODE='$CLEANUP_MODE' (criteria: age + size)."
+    log "INFO" "Skipping log cleanup for CLEANUP_MODE='$CLEANUP_MODE'."
 fi
 
-
-# --- Record disk free space after cleanup ---
+# Record disk space after cleanup
 DISK_SPACE_AFTER_GB=$(get_disk_free_gb)
 log "INFO" "Disk space after cleanup: ${DISK_SPACE_AFTER_GB} GB."
 
-# --- Create Summary and Send Notification ---
-SUMMARY_TEMP_FILE=$(mktemp) # Create a temporary file for the summary
-echo "Backup & Log Cleanup Summary" > "$SUMMARY_TEMP_FILE"
-echo "============================" >> "$SUMMARY_TEMP_FILE"
-echo "Date: $(date)" >> "$SUMMARY_TEMP_FILE"
-echo "Host: $(hostname)" >> "$SUMMARY_TEMP_FILE"
-echo "Target Path: $fullPath" >> "$SUMMARY_TEMP_FILE"
-echo "Retention Period (for 'time'/'both' modes): $BACKUP_RETAIN_DURATION days" >> "$SUMMARY_TEMP_FILE"
-echo "Cleanup Mode Selected: $CLEANUP_MODE" >> "$SUMMARY_TEMP_FILE"
-if [ "$DISK_FREE_ENABLE" == "y" ]; then
-    echo "Minimum Disk Free Target (if applicable): $DISK_MIN_FREE_GB GB" >> "$SUMMARY_TEMP_FILE"
-else
-    echo "Disk Free Space Target: Disabled" >> "$SUMMARY_TEMP_FILE"
-fi
-echo "" >> "$SUMMARY_TEMP_FILE"
-echo "Archives Removed: $total_archives_deleted_count" >> "$SUMMARY_TEMP_FILE"
-echo "Size Freed from Archives: $(human_readable_size "$total_archives_size_freed")" >> "$SUMMARY_TEMP_FILE"
-echo "Log Files Removed: $total_logs_deleted_count" >> "$SUMMARY_TEMP_FILE"
-echo "Size Freed from Logs: $(human_readable_size "$total_logs_size_freed")" >> "$SUMMARY_TEMP_FILE"
-local total_size_freed_combined=$((total_archives_size_freed + total_logs_size_freed))
-echo "Total Size Freed: $(human_readable_size "$total_size_freed_combined")" >> "$SUMMARY_TEMP_FILE"
-echo "" >> "$SUMMARY_TEMP_FILE"
-echo "Disk Free Before Cleanup: ${DISK_SPACE_BEFORE_GB} GB" >> "$SUMMARY_TEMP_FILE"
-echo "Disk Free After Cleanup:  ${DISK_SPACE_AFTER_GB} GB" >> "$SUMMARY_TEMP_FILE"
+# Create summary report temporary file
+SUMMARY_TEMP_FILE=$(mktemp)
+{
+    echo "Backup & Log Cleanup Summary"
+    echo "============================"
+    echo "Date: $(date)"
+    echo "Host: $(hostname)"
+    echo "Target Path: $fullPath"
+    echo "Retention Period: $BACKUP_RETAIN_DURATION days"
+    echo "Cleanup Mode: $CLEANUP_MODE"
+    if [ "$DISK_FREE_ENABLE" == "y" ]; then
+        echo "Minimum Disk Free Target: $DISK_MIN_FREE_GB GB"
+    else
+        echo "Disk Free Space Target: Disabled"
+    fi
+    echo ""
+    echo "Archives Removed: $total_archives_deleted_count"
+    echo "Size Freed from Archives: $(human_readable_size "$total_archives_size_freed")"
+    echo "Log Files Removed: $total_logs_deleted_count"
+    echo "Size Freed from Logs: $(human_readable_size "$total_logs_size_freed")"
+    total_size_freed_combined=$((total_archives_size_freed + total_logs_size_freed))
+    echo "Total Size Freed: $(human_readable_size "$total_size_freed_combined")"
+    echo ""
+    echo "Disk Free Before Cleanup: ${DISK_SPACE_BEFORE_GB} GB"
+    echo "Disk Free After Cleanup:  ${DISK_SPACE_AFTER_GB} GB"
+} > "$SUMMARY_TEMP_FILE"
 
-# Send notification
-local notify_status_type="INFO"
-local notify_message_prefix=""
+# Determine notification status and message prefix
+notify_status_type="INFO"
+notify_message_prefix=""
 if [ "$DRY_RUN" = true ]; then
     notify_message_prefix="[Dry Run] "
-    notify_status_type="INFO" # Dry runs are informational
+    notify_status_type="INFO"
 else
     if [ "$total_archives_deleted_count" -gt 0 ] || [ "$total_logs_deleted_count" -gt 0 ]; then
-        notify_status_type="SUCCESS" # Successful cleanup action
-    fi # Else remains INFO if nothing was deleted
+        notify_status_type="SUCCESS"
+    fi
 fi
 
 notify "$notify_status_type" \
@@ -389,23 +432,20 @@ notify "$notify_status_type" \
        "Backup Cleanup Report" \
        "$SUMMARY_TEMP_FILE"
 
-
-# --- Finalization ---
+# Finalize process
 END_TIME=$(date +%s)
-DURATION=$((END_TIME - START_TIME)) # START_TIME from common.sh
-FORMATTED_DURATION=$(format_duration "$DURATION") # format_duration from common.sh
+DURATION=$((END_TIME - START_TIME))
+FORMATTED_DURATION=$(format_duration "$DURATION")
 
-log "INFO" "Old files removal process for '$fullPath' completed in ${FORMATTED_DURATION}."
+log "INFO" "Completed old files removal for '$fullPath' in ${FORMATTED_DURATION}."
 update_status "SUCCESS" "Removed $total_archives_deleted_count archives, $total_logs_deleted_count logs from '$fullPath'. Freed $(human_readable_size "$total_size_freed_combined"). Duration: ${FORMATTED_DURATION}."
 
-# Output summary to console if not in quiet mode
 if ! $QUIET; then
     echo -e "\n${GREEN}${BOLD}--- Backup & Log Cleanup Summary ---${NC}"
-    cat "$SUMMARY_TEMP_FILE" | sed -e "s/^/  ${GREEN}/${NC}" -e "s/=/=/g" # Indent and colorize
+    sed -e "s/^/  ${GREEN}/" -e "s/=/=/g" "$SUMMARY_TEMP_FILE"
     echo -e "${GREEN}Time taken: ${NC}${BOLD}${FORMATTED_DURATION}${NC}"
 fi
 
-rm -f "$SUMMARY_TEMP_FILE" # Clean up the temporary summary file
-# Lock is released by `trap cleanup_remove_script EXIT`
+rm -f "$SUMMARY_TEMP_FILE"
 
 exit 0
